@@ -2,13 +2,13 @@ package com.yaokongqi.remote.legal
 
 /**
  * 应用内法律信息文案（与仓库 docs/、NOTICE 保持一致）。
- * Copyright (C) 2026 遥控器项目作者 · AGPL-3.0
+ * Copyright (C) 2026 GZH · AGPL-3.0
  */
 object LegalTexts {
     const val APP_NAME = "遥控器"
     const val APP_NAME_EN = "Yaokongqi"
-    const val VERSION = "0.1.2"
-    const val COPYRIGHT = "Copyright © 2026 遥控器项目作者"
+    const val VERSION = "0.1.3"
+    const val COPYRIGHT = "版权所有 © 2026 GZH"
     const val LICENSE_NAME = "GNU Affero General Public License v3.0 (AGPL-3.0)"
     const val CONTACT_EMAIL = "2178568050@qq.com"
     const val REPO_URL = "https://github.com/2178568050/yaokongqi"

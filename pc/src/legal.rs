@@ -1,5 +1,5 @@
 //! 应用内法律信息（与仓库 docs/、NOTICE 保持一致）
-//! Copyright (C) 2026 遥控器项目作者 · AGPL-3.0
+//! Copyright (C) 2026 GZH · AGPL-3.0
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -16,7 +16,7 @@ pub const REPO_URL: &str = "https://github.com/2178568050/yaokongqi";
 pub fn about_message(version: &str) -> String {
     format!(
         "{APP_NAME} (Yaokongqi) v{version}\n\
-         Copyright © 2026 遥控器项目作者\n\n\
+         Copyright © 2026 GZH\n\n\
          【开源许可】\n\
          本软件以 GNU AGPL v3.0 开源。\n\
          您可自由使用、研究，并在遵守许可证的前提下 Fork 与二次开发\n\

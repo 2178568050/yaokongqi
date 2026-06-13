@@ -227,7 +227,7 @@ Copy-Item pc\target\release\yaokongqi.exe dist\遥控器.exe
 | Fork / 二次开发并开源 | ✅ 遵守 AGPL，保留版权，建议改应用名 |
 | 商用 / 闭源集成 | ⚠️ 需邮件联系作者取得 [商业授权](docs/COMMERCIAL-LICENSE.md) |
 
-**版权所有 © 2026 遥控器项目作者** · 联系：**2178568050@qq.com**
+**版权所有 © 2026 GZH** · 联系：**2178568050@qq.com**
 
 - [许可证说明（中文）](docs/LICENSE-CN.md)
 - [免责声明](docs/DISCLAIMER.md)
