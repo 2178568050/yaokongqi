@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">遥控器</string>
+    <string name="notification_channel">连接状态</string>
+    <string name="notification_connected">已连接 %1$s</string>
+    <string name="notification_disconnected">未连接</string>
+    <string name="action_disconnect">断开</string>
+</resources>

@@ -1,0 +1,27 @@
+/target/
+**/*.rs.bk
+pc/target/
+
+# Android（兼容 Android/ 与 android/ 目录名）
+**/[Aa]ndroid/.gradle/
+**/[Aa]ndroid/build/
+**/[Aa]ndroid/app/build/
+**/[Aa]ndroid/local.properties
+**/[Aa]ndroid/.idea/caches/
+**/[Aa]ndroid/.idea/libraries/
+*.iml
+
+# 发布包（本地构建，请从 Releases 或自行编译）
+dist/*.apk
+dist/*.exe
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.log
+
+# 密钥与本地配置
+.env
+*.keystore
+*.jks

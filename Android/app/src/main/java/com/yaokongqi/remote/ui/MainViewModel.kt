@@ -1,0 +1,335 @@
+package com.yaokongqi.remote.ui
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.yaokongqi.remote.connection.ConnectionInfo
+import com.yaokongqi.remote.connection.ConnectionManager
+import com.yaokongqi.remote.connection.ConnectionState
+import com.yaokongqi.remote.model.AppSettings
+import com.yaokongqi.remote.model.ButtonAction
+import com.yaokongqi.remote.model.ButtonLayout
+import com.yaokongqi.remote.model.KeyboardKey
+import com.yaokongqi.remote.model.LayoutMode
+import com.yaokongqi.remote.model.LayoutPreset
+import com.yaokongqi.remote.model.RemoteButton
+import com.yaokongqi.remote.model.ScenarioLayoutPresets
+import com.yaokongqi.remote.model.SavedDevice
+import com.yaokongqi.remote.model.TouchSensitivity
+import com.yaokongqi.remote.storage.AppSettingsStore
+import com.yaokongqi.remote.storage.ButtonLayoutStore
+import com.yaokongqi.remote.storage.LayoutPresetStore
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+
+class MainViewModel(app: Application) : AndroidViewModel(app) {
+    private val manager = ConnectionManager(app, viewModelScope)
+    private val layoutStore = ButtonLayoutStore(app)
+    private val presetStore = LayoutPresetStore(app)
+    private val settingsStore = AppSettingsStore(app)
+
+    val connectionInfo: StateFlow<ConnectionInfo> = manager.info
+    val deviceHistory = manager.deviceHistory
+    val buttonLayout = layoutStore.layout
+    val layoutPresets = presetStore.collection
+    val appSettings: StateFlow<AppSettings> = settingsStore.settings
+
+    private val _minimalScrollMode = MutableStateFlow(false)
+    val minimalScrollMode: StateFlow<Boolean> = _minimalScrollMode.asStateFlow()
+
+    private val _textInputVisible = MutableStateFlow(false)
+    val textInputVisible: StateFlow<Boolean> = _textInputVisible.asStateFlow()
+
+    private val _volumeUpPressCount = MutableStateFlow(0)
+    val volumeUpPressCount: StateFlow<Int> = _volumeUpPressCount.asStateFlow()
+
+    private val _inputSessionKey = MutableStateFlow(0)
+    val inputSessionKey: StateFlow<Int> = _inputSessionKey.asStateFlow()
+
+    private val _volumeConfirmPending = MutableStateFlow(false)
+    val volumeConfirmPending: StateFlow<Boolean> = _volumeConfirmPending.asStateFlow()
+
+    private var settingsDraft: AppSettings = settingsStore.load()
+    private var layoutSnapshot: ButtonLayout? = null
+
+    val savedHost: String? get() = manager.savedHost
+    val savedPcName: String? get() = manager.savedPcName
+    val hasSavedSession: Boolean get() = manager.hasSavedSession()
+
+    init {
+        applyPersistedSettings()
+        presetStore.ensureBuiltinPresets()
+        presetStore.ensureDefaultPreset(layoutStore.load())
+        applyActivePreset()
+        viewModelScope.launch {
+            manager.info
+                .map { it.state }
+                .distinctUntilChanged()
+                .collect { state ->
+                    when (state) {
+                        ConnectionState.Connected -> bumpInputSession()
+                        ConnectionState.Disconnected, ConnectionState.Error -> resetSessionUi()
+                        else -> Unit
+                    }
+                }
+        }
+        if (hasSavedSession) {
+            manager.reconnectSaved()
+        }
+    }
+
+    private fun applyPersistedSettings() {
+        val saved = settingsStore.load()
+        settingsDraft = saved
+        settingsStore.updateDraft(saved)
+    }
+
+    fun isActivePresetBuiltin(): Boolean {
+        val active = presetStore.collection.value.activePreset() ?: return false
+        return ScenarioLayoutPresets.isBuiltin(active.id)
+    }
+
+    fun isActiveLayoutEditable(): Boolean = !isActivePresetBuiltin()
+
+    private fun canonicalLayoutFor(preset: LayoutPreset): ButtonLayout {
+        if (!ScenarioLayoutPresets.isBuiltin(preset.id)) return preset.layout
+        return ScenarioLayoutPresets.all().find { it.id == preset.id }?.layout ?: preset.layout
+    }
+
+    private fun applyActivePreset() {
+        val preset = presetStore.collection.value.activePreset() ?: return
+        layoutStore.save(canonicalLayoutFor(preset))
+        settingsStore.updateDraft(
+            settingsStore.load().copy(layoutMode = canonicalLayoutFor(preset).layoutMode),
+        )
+    }
+
+    fun syncDraftLayoutFromActivePreset(draft: AppSettings): AppSettings {
+        val preset = presetStore.collection.value.activePreset() ?: return draft
+        return draft.copy(layoutMode = canonicalLayoutFor(preset).layoutMode)
+    }
+
+    fun pair(host: String, pin: String) = manager.pair(host, pin)
+
+    fun reconnect() = manager.reconnectSaved()
+
+    fun reconnectTo(host: String) = manager.reconnectTo(host)
+
+    fun disconnect() {
+        manager.disconnect()
+        resetVolumeCounter()
+    }
+
+    fun removeDevice(host: String) = manager.removeDevice(host)
+
+    fun forgetAllDevices() = manager.forgetAllDevices()
+
+    fun savedDevices(): List<SavedDevice> = deviceHistory.value.devices
+
+    fun sendButton(button: RemoteButton) {
+        when (button.action) {
+            ButtonAction.KEY -> {
+                if (button.mods != 0) manager.sendCombo(button.vk, button.mods)
+                else manager.sendKey(button.vk, 0)
+            }
+            ButtonAction.VOLUME_UP -> requestVolumeUp()
+            ButtonAction.VOLUME_DOWN -> {
+                manager.sendVolumeDown()
+                if (_volumeUpPressCount.value > 0) {
+                    _volumeUpPressCount.value = _volumeUpPressCount.value - 1
+                }
+            }
+            ButtonAction.OPEN_KEYBOARD -> showTextInput()
+            ButtonAction.SHUTDOWN -> manager.sendSystemShutdown()
+        }
+    }
+
+    fun requestVolumeUp() {
+        if (_volumeUpPressCount.value >= VOLUME_UP_CONFIRM_THRESHOLD) {
+            _volumeConfirmPending.value = true
+            return
+        }
+        manager.sendVolumeUp()
+        _volumeUpPressCount.value = _volumeUpPressCount.value + 1
+    }
+
+    fun confirmVolumeUp() {
+        _volumeConfirmPending.value = false
+        manager.sendVolumeUp()
+        _volumeUpPressCount.value = _volumeUpPressCount.value + 1
+    }
+
+    fun dismissVolumeConfirm() {
+        _volumeConfirmPending.value = false
+    }
+
+    fun resetVolumeCounter() {
+        _volumeUpPressCount.value = 0
+        _volumeConfirmPending.value = false
+    }
+
+    fun sendKeyboardKey(key: KeyboardKey) {
+        if (key.mods != 0) manager.sendCombo(key.vk, key.mods)
+        else manager.sendKey(key.vk, 0)
+    }
+
+    fun sendMouseMove(dx: Float, dy: Float, sensitivity: TouchSensitivity = appSettings.value.touchSensitivity) {
+        manager.sendMouseMove(
+            dx * sensitivity.moveMultiplier,
+            dy * sensitivity.moveMultiplier,
+        )
+    }
+
+    fun sendMouseLeftClick() = manager.sendMouseLeftClick()
+
+    fun sendMouseDoubleClick() = manager.sendMouseDoubleClick()
+
+    fun sendMouseRightClick() = manager.sendMouseRightClick()
+
+    fun sendMouseScroll(deltaY: Int, deltaX: Int = 0, sensitivity: TouchSensitivity = appSettings.value.touchSensitivity) {
+        val scale = sensitivity.scrollMultiplier / TouchSensitivity.MEDIUM.scrollMultiplier
+        manager.sendMouseScroll(
+            (deltaY * scale).toInt(),
+            (deltaX * scale).toInt(),
+        )
+    }
+
+    fun sendAltTab() = manager.sendCombo(0x09, 4)
+
+    fun sendAltShiftTab() = manager.sendCombo(0x09, 5)
+
+    fun sendWinTab() = manager.sendCombo(0x09, 8)
+
+    fun sendText(text: String) = manager.sendText(text)
+
+    fun addButton(button: RemoteButton, layoutMode: LayoutMode? = null): Boolean {
+        if (isActivePresetBuiltin()) return false
+        return layoutStore.addButton(button, layoutMode)
+    }
+
+    fun updateButton(button: RemoteButton) {
+        if (isActivePresetBuiltin()) return
+        layoutStore.updateButton(button)
+    }
+
+    fun removeButton(id: String) {
+        if (isActivePresetBuiltin()) return
+        layoutStore.removeButton(id)
+    }
+
+    fun resetLayout() {
+        if (isActivePresetBuiltin()) return
+        layoutStore.resetDefault()
+    }
+
+    fun saveCurrentAsPreset(name: String) {
+        val layout = layoutStore.load()
+        presetStore.saveCurrentLayout(name, layout)
+        presetStore.updateActiveLayout(layout)
+    }
+
+    fun switchPresetNext() {
+        val preset = presetStore.switchNext() ?: return
+        applyPreset(preset)
+    }
+
+    fun switchPresetPrevious() {
+        val preset = presetStore.switchPrevious() ?: return
+        applyPreset(preset)
+    }
+
+    fun switchPresetTo(index: Int) {
+        val preset = presetStore.switchTo(index) ?: return
+        applyPreset(preset)
+    }
+
+    private fun applyPreset(preset: LayoutPreset) {
+        val layout = canonicalLayoutFor(preset)
+        layoutStore.save(layout)
+        val updated = settingsStore.load().copy(layoutMode = layout.layoutMode)
+        settingsStore.save(updated)
+        settingsDraft = updated
+    }
+
+    fun deletePreset(id: String) {
+        presetStore.deletePreset(id)
+        applyActivePreset()
+    }
+
+    fun renamePreset(id: String, name: String) = presetStore.renamePreset(id, name)
+
+    fun persistActivePresetLayout() {
+        presetStore.updateActiveLayout(layoutStore.load())
+    }
+
+    fun loadSettingsForEdit(): AppSettings {
+        settingsDraft = settingsStore.load().copy(layoutMode = layoutStore.load().layoutMode)
+        layoutSnapshot = layoutStore.load()
+        return settingsDraft
+    }
+
+    fun saveSettings(settings: AppSettings) {
+        settingsDraft = settings
+        settingsStore.save(settings)
+        settingsStore.updateDraft(settings)
+        if (isActiveLayoutEditable()) {
+            layoutStore.setLayoutMode(settings.layoutMode)
+            persistActivePresetLayout()
+        }
+        layoutSnapshot = null
+    }
+
+    fun discardSettingsEdit() {
+        val saved = settingsStore.load()
+        settingsDraft = saved
+        settingsStore.updateDraft(saved)
+        layoutSnapshot?.let { layoutStore.save(it) }
+        layoutSnapshot = null
+        applyActivePreset()
+    }
+
+    fun showTextInput() {
+        if (connectionInfo.value.state == ConnectionState.Connected) {
+            _textInputVisible.value = true
+        }
+    }
+
+    fun hideTextInput() {
+        _textInputVisible.value = false
+    }
+
+    fun enterMinimalScrollMode() {
+        if (connectionInfo.value.state == ConnectionState.Connected) {
+            _minimalScrollMode.value = true
+        }
+    }
+
+    fun exitMinimalScrollMode() {
+        _minimalScrollMode.value = false
+    }
+
+    fun onAppForeground() {
+        if (connectionInfo.value.state == ConnectionState.Connected) {
+            bumpInputSession()
+        }
+    }
+
+    fun resetSessionUi() {
+        _minimalScrollMode.value = false
+        _textInputVisible.value = false
+        resetVolumeCounter()
+        bumpInputSession()
+    }
+
+    private fun bumpInputSession() {
+        _inputSessionKey.value = _inputSessionKey.value + 1
+    }
+
+    private companion object {
+        const val VOLUME_UP_CONFIRM_THRESHOLD = 10
+    }
+}

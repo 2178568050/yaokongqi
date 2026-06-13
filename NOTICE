@@ -1,0 +1,25 @@
+遥控器 (Yaokongqi) — 版权与商标声明
+=====================================
+
+版权所有 (C) 2026 遥控器项目作者
+联系邮箱：2178568050@qq.com
+
+本软件源代码依据 GNU Affero General Public License v3.0（AGPL-3.0）授权。
+完整许可证文本见仓库根目录 LICENSE 及 licenses/AGPL-3.0.txt。
+
+附加条款（与 AGPL-3.0 一并适用）：
+1. 未经版权持有人书面授权，禁止将本软件或其衍生作品用于任何商业目的，
+   包括但不限于：收费分发、嵌入商业产品/服务、SaaS 营利运营、
+   应用商店付费上架、企业内商用部署（非个人学习研究场景）等。
+2. 个人学习、研究、教学、非盈利组织内部使用，以及遵守 AGPL-3.0 的
+   开源二次开发（需保留版权声明、开源衍生代码、标注修改）不受上述商用限制。
+3. 「遥控器」名称、图标及本项目整体品牌形象受作者保护；Fork 或二次发布时
+   若用于公开分发，须修改应用名称与标识以避免与原版混淆（详见 docs/TRADEMARK.md）。
+4. 如需商业授权，请联系：2178568050@qq.com
+
+Yaokongqi Remote Control
+Copyright (C) 2026 Project Author
+Contact: 2178568050@qq.com
+
+Licensed under GNU AGPL v3.0. See LICENSE for full text.
+Commercial use requires separate written permission. See docs/COMMERCIAL-LICENSE.md.
