@@ -1,6 +1,6 @@
 [package]
 name = "yaokongqi"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "遥控器 (Yaokongqi) — Windows 端远程输入接收服务"
 authors = ["遥控器项目作者 <2178568050@qq.com>"]
@@ -28,6 +28,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Memory",
     "Win32_System_DataExchange",
     "Win32_System_Ole",
+    "Win32_System_Registry",
 ] }
 local-ip-address = "0.6"
 rand = "0.8"

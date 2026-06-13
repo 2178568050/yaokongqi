@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod auth;
+mod autostart;
 mod config;
 mod icon;
 mod input;
@@ -25,6 +26,9 @@ fn main() -> Result<()> {
 
     let config = Arc::new(RwLock::new(AppConfig::load()?));
     let cfg = config.blocking_read();
+    if let Err(e) = autostart::set_enabled(cfg.autostart) {
+        log::warn!("同步开机自启设置失败: {e}");
+    }
     log::info!(
         "{} 已就绪 | 端口 {} | PIN: {}（有效至 {}，过期自动刷新）",
         config::APP_NAME,

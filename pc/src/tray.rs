@@ -5,13 +5,14 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::RwLock;
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     TrayIconBuilder,
 };
 use winit::event::Event;
 use winit::event_loop::{ControlFlow, EventLoop, EventLoopProxy};
 
 use crate::auth::AppConfig;
+use crate::autostart;
 use crate::config::{APP_NAME, LISTEN_PORT, PIN_TTL_SECS};
 use crate::icon::build_tray_icon;
 use crate::legal;
@@ -19,6 +20,7 @@ use crate::legal;
 enum TrayUserEvent {
     RefreshPin,
     CheckPinExpiry,
+    ToggleAutostart,
     About,
     Quit,
 }
@@ -34,11 +36,23 @@ pub fn run_tray(config: Arc<RwLock<AppConfig>>) -> Result<()> {
     let event_loop: EventLoop<TrayUserEvent> = EventLoop::with_user_event()?;
     let proxy: EventLoopProxy<TrayUserEvent> = event_loop.create_proxy();
 
+    let cfg = config.blocking_read();
+    let autostart_enabled = cfg.autostart;
+    drop(cfg);
+
     let pin_item = MenuItem::with_id("refresh_pin", "刷新配对码", true, None);
+    let autostart_item = CheckMenuItem::with_id(
+        "autostart",
+        "开机自启",
+        true,
+        autostart_enabled,
+        None,
+    );
     let about_item = MenuItem::with_id("about", "关于与法律信息", true, None);
     let quit_item = MenuItem::with_id("quit", "退出", true, None);
     let menu = Menu::with_items(&[
         &pin_item,
+        &autostart_item,
         &PredefinedMenuItem::separator(),
         &about_item,
         &PredefinedMenuItem::separator(),
@@ -75,6 +89,7 @@ pub fn run_tray(config: Arc<RwLock<AppConfig>>) -> Result<()> {
             if let Ok(event) = menu_channel.recv() {
                 let user_event = match event.id.0.as_str() {
                     "refresh_pin" => Some(TrayUserEvent::RefreshPin),
+                    "autostart" => Some(TrayUserEvent::ToggleAutostart),
                     "about" => Some(TrayUserEvent::About),
                     "quit" => Some(TrayUserEvent::Quit),
                     _ => None,
@@ -93,6 +108,9 @@ pub fn run_tray(config: Arc<RwLock<AppConfig>>) -> Result<()> {
             }
             Event::UserEvent(TrayUserEvent::CheckPinExpiry) => {
                 update_pin_tooltip(&config, &tray, &local_ip, false);
+            }
+            Event::UserEvent(TrayUserEvent::ToggleAutostart) => {
+                toggle_autostart(&config, &autostart_item);
             }
             Event::UserEvent(TrayUserEvent::About) => {
                 legal::show_about(env!("CARGO_PKG_VERSION"));
@@ -126,5 +144,25 @@ fn update_pin_tooltip(
         }
         let tip = format_tooltip(local_ip, &cfg.pin, &cfg.pin_expires_local_hm());
         let _ = tray.set_tooltip(Some(tip));
+    }
+}
+
+fn toggle_autostart(config: &Arc<RwLock<AppConfig>>, item: &CheckMenuItem) {
+    if let Ok(mut cfg) = config.try_write() {
+        cfg.autostart = !cfg.autostart;
+        match autostart::set_enabled(cfg.autostart) {
+            Ok(()) => {
+                let _ = cfg.save();
+                let _ = item.set_checked(cfg.autostart);
+                log::info!(
+                    "开机自启已{}",
+                    if cfg.autostart { "开启" } else { "关闭" }
+                );
+            }
+            Err(e) => {
+                cfg.autostart = !cfg.autostart;
+                log::error!("设置开机自启失败: {e}");
+            }
+        }
     }
 }
