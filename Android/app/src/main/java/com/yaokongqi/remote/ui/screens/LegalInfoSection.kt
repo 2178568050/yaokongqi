@@ -67,6 +67,27 @@ fun LegalInfoSection() {
             )
         }
 
+        HorizontalDivider()
+
+        Text("开源仓库", style = MaterialTheme.typography.labelLarge)
+        Text(
+            LegalTexts.STAR_THANKS,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        TextButton(
+            onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(LegalTexts.REPO_URL))
+                context.startActivity(intent)
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                LegalTexts.REPO_URL,
+                textDecoration = TextDecoration.Underline,
+            )
+        }
+
         Text(
             LegalTexts.REPO_HINT,
             style = MaterialTheme.typography.labelSmall,

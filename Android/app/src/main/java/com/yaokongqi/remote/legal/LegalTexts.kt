@@ -7,10 +7,13 @@ package com.yaokongqi.remote.legal
 object LegalTexts {
     const val APP_NAME = "遥控器"
     const val APP_NAME_EN = "Yaokongqi"
-    const val VERSION = "0.1.0"
+    const val VERSION = "0.1.2"
     const val COPYRIGHT = "Copyright © 2026 遥控器项目作者"
     const val LICENSE_NAME = "GNU Affero General Public License v3.0 (AGPL-3.0)"
     const val CONTACT_EMAIL = "2178568050@qq.com"
+    const val REPO_URL = "https://github.com/2178568050/yaokongqi"
+    const val STAR_THANKS =
+        "如果觉得有用，欢迎给项目 Star ⭐，谢谢你的支持！"
 
     val LICENSE_SUMMARY: String =
         "本软件以 AGPL-3.0 开源。您可自由使用、研究，并在遵守许可证的前提下 Fork 与二次开发（衍生作品须同样开源并保留版权声明）。\n\n" +

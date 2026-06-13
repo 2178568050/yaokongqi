@@ -106,7 +106,7 @@ fun ConnectedPadScreen(
         )
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when {
             textInputVisible && !landscapeSplit -> {
                 TextInputPanel(
@@ -674,8 +674,8 @@ private fun PadButton(
         },
         modifier = modifier.height(height),
         shape = RoundedCornerShape(if (compact) 6.dp else 8.dp),
-        color = if (pressed) scheme.primaryContainer else scheme.surface,
-        border = BorderStroke(1.dp, scheme.outline),
+        color = if (pressed) scheme.primaryContainer else scheme.surfaceVariant,
+        border = BorderStroke(1.dp, scheme.outline.copy(alpha = 0.65f)),
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(horizontal = 2.dp)) {
             Text(
@@ -737,7 +737,7 @@ fun TouchpadArea(
     }
 
     Box(
-        modifier = modifier.background(MaterialTheme.colorScheme.surface),
+        modifier = modifier.background(MaterialTheme.colorScheme.background),
         contentAlignment = Alignment.Center,
     ) {
         if (!scrollOnly && settings.showTouchpadHint) {

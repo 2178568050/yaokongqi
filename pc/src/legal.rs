@@ -11,6 +11,7 @@ use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, M
 use crate::config::APP_NAME;
 
 pub const CONTACT_EMAIL: &str = "2178568050@qq.com";
+pub const REPO_URL: &str = "https://github.com/2178568050/yaokongqi";
 
 pub fn about_message(version: &str) -> String {
     format!(
@@ -26,6 +27,9 @@ pub fn about_message(version: &str) -> String {
          【免责声明】\n\
          本软件按「现状」提供，使用风险由用户自行承担。\n\
          请在可信局域网内使用。详见仓库 docs/DISCLAIMER.md\n\n\
+         【开源仓库】\n\
+         {REPO_URL}\n\
+         如果觉得有用，欢迎给项目 Star，谢谢支持！\n\n\
          【联系】\n\
          {CONTACT_EMAIL}\n\
          （问题反馈 / 商业授权 / 安全漏洞私下报告）"

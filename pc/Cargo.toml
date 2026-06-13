@@ -1,6 +1,6 @@
 [package]
 name = "yaokongqi"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "遥控器 (Yaokongqi) — Windows 端远程输入接收服务"
 authors = ["遥控器项目作者 <2178568050@qq.com>"]

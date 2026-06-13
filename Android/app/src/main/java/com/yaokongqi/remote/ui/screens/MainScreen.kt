@@ -1,5 +1,6 @@
 package com.yaokongqi.remote.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -52,7 +53,10 @@ import com.yaokongqi.remote.ui.theme.ErrorColor
 private enum class SubScreen { Pad, Settings }
 
 @Composable
-fun MainScreen(viewModel: MainViewModel) {
+fun MainScreen(
+    viewModel: MainViewModel,
+    modifier: Modifier = Modifier,
+) {
     val context = LocalContext.current
     val info by viewModel.connectionInfo.collectAsState()
     val settings by viewModel.appSettings.collectAsState()
@@ -85,6 +89,7 @@ fun MainScreen(viewModel: MainViewModel) {
     ) {
         AnimatedContent(
             targetState = route,
+            modifier = modifier.fillMaxSize(),
             transitionSpec = {
                 when {
                     initialState == MainRoute.Pad && targetState == MainRoute.MinimalScroll ->
@@ -113,6 +118,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 MainRoute.Pad -> Column(
                     modifier = Modifier
                         .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
                         .then(
                             if (landscapeCompactBar) Modifier else Modifier.statusBarsPadding(),
                         ),
@@ -242,7 +248,7 @@ private fun StatusBar(
                 Text(
                     "遥控器",
                     style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = MaterialTheme.colorScheme.onBackground,
                 )
                 Text(statusText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -264,7 +270,7 @@ private fun StatusBarControls(
     compact: Boolean = false,
 ) {
     val iconColors = IconButtonDefaults.iconButtonColors(
-        contentColor = MaterialTheme.colorScheme.onSurface,
+        contentColor = MaterialTheme.colorScheme.onBackground,
     )
     val buttonSize = if (compact) 32.dp else 48.dp
     val iconSize = if (compact) 18.dp else 24.dp

@@ -47,17 +47,15 @@ object ScenarioLayoutPresets {
         Definition(
             id = ID_VIDEO,
             name = "刷视频",
-            description = "上排音量±与左右切条，下排上下翻页，适合短视频",
+            description = "音量±与上下翻页，适合短视频",
             layout = ButtonLayout(
-                layoutMode = LayoutMode.GRID_4X2,
-                columns = 4,
+                layoutMode = LayoutMode.GRID_2X2,
+                columns = 2,
                 buttons = listOf(
                     key("${ID_VIDEO}-vol-up", "音量+", 0, 0, action = ButtonAction.VOLUME_UP),
                     key("${ID_VIDEO}-vol-down", "音量-", 0, 1, action = ButtonAction.VOLUME_DOWN),
-                    key("${ID_VIDEO}-left", "←", 0, 2, vk = 0x25),
-                    key("${ID_VIDEO}-right", "→", 0, 3, vk = 0x27),
-                    key("${ID_VIDEO}-up", "↑", 1, 1, vk = 0x26),
-                    key("${ID_VIDEO}-down", "↓", 1, 2, vk = 0x28),
+                    key("${ID_VIDEO}-up", "↑", 1, 0, vk = 0x26),
+                    key("${ID_VIDEO}-down", "↓", 1, 1, vk = 0x28),
                 ),
             ),
         ),
