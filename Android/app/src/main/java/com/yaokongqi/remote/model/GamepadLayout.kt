@@ -207,32 +207,31 @@ object GamepadLayouts {
     fun defaultControls(): List<GamepadControlPlacement> =
         defaultButtonControls() + defaultMoveStick()
 
-    /** Apex 默认包：右半屏战斗区布局，避开左上角系统栏与左下移动轮盘 */
+    /** Apex 默认包：左开火 + 右战斗区；顶部留右上编辑栏空间 */
     fun defaultButtonControls(): List<GamepadControlPlacement> = listOf(
-        // 主战斗（右下弧）
-        GamepadControlPlacement(id = GamepadControlId.FIRE, centerX = 0.87f, centerY = 0.82f, sizeDp = 70f),
-        GamepadControlPlacement(id = GamepadControlId.JUMP, centerX = 0.93f, centerY = 0.66f, sizeDp = 54f),
-        GamepadControlPlacement(id = GamepadControlId.SLIDE, centerX = 0.78f, centerY = 0.90f, sizeDp = 50f),
-        // 中右功能区
-        GamepadControlPlacement(id = GamepadControlId.RELOAD, centerX = 0.66f, centerY = 0.74f, sizeDp = 46f),
-        GamepadControlPlacement(id = GamepadControlId.INTERACT, centerX = 0.58f, centerY = 0.84f, sizeDp = 48f),
-        GamepadControlPlacement(id = GamepadControlId.ULTIMATE, centerX = 0.66f, centerY = 0.62f, sizeDp = 48f),
-        GamepadControlPlacement(id = GamepadControlId.THROW, centerX = 0.72f, centerY = 0.58f, sizeDp = 46f),
-        // D-pad / 切枪（右半屏上部）
-        GamepadControlPlacement(id = GamepadControlId.HEAL, centerX = 0.54f, centerY = 0.40f, sizeDp = 44f),
-        GamepadControlPlacement(id = GamepadControlId.SURVIVAL, centerX = 0.54f, centerY = 0.52f, sizeDp = 44f),
-        GamepadControlPlacement(id = GamepadControlId.WEAPON, centerX = 0.64f, centerY = 0.46f, sizeDp = 46f),
-        // 右上角：开镜 + 战术技能（拇指易触达）
-        GamepadControlPlacement(id = GamepadControlId.ADS, centerX = 0.88f, centerY = 0.14f, sizeDp = 62f),
-        GamepadControlPlacement(id = GamepadControlId.TACTICAL, centerX = 0.78f, centerY = 0.14f, sizeDp = 48f),
-        // 系统键（顶部内侧，避开编辑栏）
-        GamepadControlPlacement(id = GamepadControlId.MAP, centerX = 0.58f, centerY = 0.14f, sizeDp = 42f),
-        GamepadControlPlacement(id = GamepadControlId.BACKPACK, centerX = 0.68f, centerY = 0.14f, sizeDp = 42f),
+        // 左上主火力（大尺寸）
+        GamepadControlPlacement(id = GamepadControlId.FIRE, centerX = 0.17f, centerY = 0.24f, sizeDp = 118f),
+        // 左下技能组
+        GamepadControlPlacement(id = GamepadControlId.THROW, centerX = 0.28f, centerY = 0.80f, sizeDp = 48f),
+        GamepadControlPlacement(id = GamepadControlId.HEAL, centerX = 0.38f, centerY = 0.88f, sizeDp = 46f),
+        GamepadControlPlacement(id = GamepadControlId.ULTIMATE, centerX = 0.48f, centerY = 0.90f, sizeDp = 48f),
+        // 顶部功能（避开右上角编辑栏）
+        GamepadControlPlacement(id = GamepadControlId.MAP, centerX = 0.58f, centerY = 0.18f, sizeDp = 42f),
+        GamepadControlPlacement(id = GamepadControlId.TACTICAL, centerX = 0.68f, centerY = 0.18f, sizeDp = 48f),
+        GamepadControlPlacement(id = GamepadControlId.BACKPACK, centerX = 0.78f, centerY = 0.18f, sizeDp = 42f),
+        // 右半屏战斗
+        GamepadControlPlacement(id = GamepadControlId.ADS, centerX = 0.76f, centerY = 0.36f, sizeDp = 58f),
+        GamepadControlPlacement(id = GamepadControlId.SURVIVAL, centerX = 0.52f, centerY = 0.58f, sizeDp = 44f),
+        GamepadControlPlacement(id = GamepadControlId.INTERACT, centerX = 0.60f, centerY = 0.62f, sizeDp = 46f),
+        GamepadControlPlacement(id = GamepadControlId.WEAPON, centerX = 0.62f, centerY = 0.72f, sizeDp = 46f),
+        GamepadControlPlacement(id = GamepadControlId.RELOAD, centerX = 0.52f, centerY = 0.76f, sizeDp = 46f),
+        GamepadControlPlacement(id = GamepadControlId.JUMP, centerX = 0.92f, centerY = 0.58f, sizeDp = 52f),
+        GamepadControlPlacement(id = GamepadControlId.SLIDE, centerX = 0.86f, centerY = 0.88f, sizeDp = 50f),
     )
 
     fun defaultMoveStick(): GamepadControlPlacement = GamepadControlPlacement(
         id = GamepadControlId.MOVE_STICK,
-        centerX = 0.20f,
+        centerX = 0.14f,
         centerY = 0.78f,
         sizeDp = 108f,
     )

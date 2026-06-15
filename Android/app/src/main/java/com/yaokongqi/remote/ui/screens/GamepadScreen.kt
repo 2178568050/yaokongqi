@@ -308,8 +308,8 @@ fun GamepadScreen(
             },
             onOpenSettings = onOpenSettings,
             modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 4.dp, top = 4.dp),
+                .align(Alignment.TopEnd)
+                .padding(end = 8.dp, top = 4.dp),
         )
 
         if (!isConnected && !editMode) {
@@ -864,12 +864,15 @@ private fun VirtualMoveStick(
     val yOff = (base.y - stickRadiusPx).coerceAtLeast(0f)
     val ringSizeDp = with(density) { (stickRadiusPx * 2f).toDp() }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .then(
-                if (interactive) {
-                    Modifier.pointerInput(floatingStick, deadzone, stickRadiusPx, placement) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (interactive) {
+            // 仅左半屏接收移动轮盘手势，避免挡住右半屏瞄准
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxHeight()
+                    .fillMaxWidth(0.5f)
+                    .pointerInput(floatingStick, deadzone, stickRadiusPx, placement) {
                         detectDragGestures(
                             onDragStart = { offset ->
                                 if (!isMoveTouch(offset)) return@detectDragGestures
@@ -893,12 +896,9 @@ private fun VirtualMoveStick(
                             onDragEnd = { releaseStick() },
                             onDragCancel = { releaseStick() },
                         )
-                    }
-                } else {
-                    Modifier
-                },
-            ),
-    ) {
+                    },
+            )
+        }
         if (showStick) {
             Box(
                 modifier = Modifier
@@ -951,35 +951,35 @@ private fun AimZone(
         label = "aim_border_alpha",
     )
 
-    Box(
-        modifier = modifier.then(
-            if (interactive) {
-                Modifier.pointerInput(Unit) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        if (down.position.x < size.width * 0.5f) return@awaitEachGesture
-                        aiming = true
-                        onAimBegin()
-                        var last = down.position
-                        drag(down.id) { change ->
-                            val pos = change.position
-                            val dx = pos.x - last.x
-                            val dy = pos.y - last.y
-                            if (dx != 0f || dy != 0f) {
-                                onAimDelta(dx, dy)
+    Box(modifier = modifier) {
+        if (interactive) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxWidth(0.5f)
+                    .fillMaxHeight()
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            aiming = true
+                            onAimBegin()
+                            var last = down.position
+                            drag(down.id) { change ->
+                                val pos = change.position
+                                val dx = pos.x - last.x
+                                val dy = pos.y - last.y
+                                if (dx != 0f || dy != 0f) {
+                                    onAimDelta(dx, dy)
+                                }
+                                last = pos
+                                change.consume()
                             }
-                            last = pos
-                            change.consume()
+                            aiming = false
+                            onAimRelease()
                         }
-                        aiming = false
-                        onAimRelease()
-                    }
-                }
-            } else {
-                Modifier
-            },
-        ),
-    ) {
+                    },
+            )
+        }
         if (showHint) {
             Box(
                 modifier = Modifier
