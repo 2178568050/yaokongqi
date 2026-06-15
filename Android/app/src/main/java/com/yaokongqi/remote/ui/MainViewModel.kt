@@ -19,12 +19,20 @@ import com.yaokongqi.remote.model.TouchSensitivity
 import com.yaokongqi.remote.storage.AppSettingsStore
 import com.yaokongqi.remote.storage.ButtonLayoutStore
 import com.yaokongqi.remote.storage.LayoutPresetStore
+import com.yaokongqi.remote.model.GamepadLayout
+import com.yaokongqi.remote.model.GamepadLayouts
+import com.yaokongqi.remote.model.GamepadSnapshot
+import com.yaokongqi.remote.model.RemoteInputMode
+import com.yaokongqi.remote.ui.game.GamepadInputEngine
 import com.yaokongqi.remote.ui.gesture.TrackpadLongPressController
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -38,6 +46,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val buttonLayout = layoutStore.layout
     val layoutPresets = presetStore.collection
     val appSettings: StateFlow<AppSettings> = settingsStore.settings
+
+    val gamepadEngine = GamepadInputEngine()
+    val gamepadError = manager.gamepadError
+
+    private var gamepadLoopJob: Job? = null
+    private val _gamepadLayoutEditRequest = MutableStateFlow(0)
+    val gamepadLayoutEditRequest: StateFlow<Int> = _gamepadLayoutEditRequest.asStateFlow()
 
     private val _minimalScrollMode = MutableStateFlow(false)
     val minimalScrollMode: StateFlow<Boolean> = _minimalScrollMode.asStateFlow()
@@ -289,12 +304,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun saveSettings(settings: AppSettings) {
-        settingsDraft = settings
-        settingsStore.save(settings)
-        settingsStore.updateDraft(settings)
-        manager.setShowConnectionNotification(settings.showConnectionNotification)
+        val normalized = settings.clamped()
+        settingsDraft = normalized
+        settingsStore.save(normalized)
+        settingsStore.updateDraft(normalized)
+        manager.setShowConnectionNotification(normalized.showConnectionNotification)
+        if (!normalized.shooterGamepadMode) {
+            exitGamepadMode()
+        }
         if (isActiveLayoutEditable()) {
-            layoutStore.setLayoutMode(settings.layoutMode)
+            layoutStore.setLayoutMode(normalized.layoutMode)
             persistActivePresetLayout()
         }
         layoutSnapshot = null
@@ -343,14 +362,72 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onAppBackground() {
         manager.setPcInputEnabled(false)
+        gamepadEngine.reset()
+        manager.updateGamepadSnapshot(gamepadEngine.tick(appSettings.value.aimDecay))
         TrackpadLongPressController.cancelAll()
         bumpInputSession()
+    }
+
+    fun enterGamepadMode() {
+        if (connectionInfo.value.state != ConnectionState.Connected) return
+        val hz = appSettings.value.gamepadPollHz
+        manager.setRemoteInputMode(RemoteInputMode.GAMEPAD, hz)
+    }
+
+    /** 连接恢复后重新通知 PC 进入手柄模式（断联期间 UI 仍可编辑布局） */
+    fun syncGamepadModeIfConnected() {
+        if (connectionInfo.value.state == ConnectionState.Connected &&
+            appSettings.value.shooterGamepadMode
+        ) {
+            enterGamepadMode()
+        }
+    }
+
+    fun exitGamepadMode() {
+        gamepadLoopJob?.cancel()
+        gamepadLoopJob = null
+        gamepadEngine.reset()
+        manager.updateGamepadSnapshot(GamepadSnapshot())
+        manager.setRemoteInputMode(RemoteInputMode.KEYBOARD_MOUSE)
+    }
+
+    fun runGamepadLoop(pollHz: Int, aimDecay: Float) {
+        gamepadLoopJob?.cancel()
+        gamepadLoopJob = viewModelScope.launch {
+            val intervalMs = (1000.0 / pollHz.coerceIn(60, 250)).coerceAtLeast(4.0).toLong()
+            while (isActive) {
+                if (connectionInfo.value.state != ConnectionState.Connected) break
+                val snapshot = gamepadEngine.tick(aimDecay)
+                manager.updateGamepadSnapshot(snapshot)
+                delay(intervalMs)
+            }
+        }
+    }
+
+    fun clearGamepadError() = manager.clearGamepadError()
+
+    fun saveGamepadLayout(layout: GamepadLayout) {
+        val updated = settingsStore.load().copy(gamepadLayout = layout)
+        settingsStore.save(updated)
+        settingsStore.updateDraft(updated)
+        settingsDraft = updated
+    }
+
+    fun resetGamepadLayout(settings: AppSettings): AppSettings {
+        val updated = settings.copy(gamepadLayout = GamepadLayouts.default())
+        saveSettings(updated)
+        return updated
+    }
+
+    fun requestGamepadLayoutEdit() {
+        _gamepadLayoutEditRequest.value = _gamepadLayoutEditRequest.value + 1
     }
 
     fun resetSessionUi() {
         _minimalScrollMode.value = false
         _textInputVisible.value = false
         resetVolumeCounter()
+        exitGamepadMode()
         bumpInputSession()
     }
 

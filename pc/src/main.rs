@@ -19,10 +19,12 @@ use tokio::sync::RwLock;
 
 use auth::AppConfig;
 use input::init_worker;
+use input::init_gamepad;
 
 fn main() -> Result<()> {
     init_logging();
     init_worker();
+    init_gamepad();
 
     let config = Arc::new(RwLock::new(AppConfig::load()?));
     let cfg = config.blocking_read();

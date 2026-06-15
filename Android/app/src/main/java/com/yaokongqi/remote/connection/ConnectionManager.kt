@@ -6,6 +6,8 @@ import android.os.Build
 import com.yaokongqi.remote.AppConfig
 import com.yaokongqi.remote.service.RemoteService
 import com.yaokongqi.remote.protocol.encodeCombo
+import com.yaokongqi.remote.protocol.encodeGamepad
+import com.yaokongqi.remote.protocol.encodeInputMode
 import com.yaokongqi.remote.protocol.encodeKey
 import com.yaokongqi.remote.protocol.encodeMouseClick
 import com.yaokongqi.remote.protocol.encodeMouseMove
@@ -15,6 +17,8 @@ import com.yaokongqi.remote.protocol.encodePing
 import com.yaokongqi.remote.protocol.encodeSystem
 import com.yaokongqi.remote.protocol.encodeTextInput
 import com.yaokongqi.remote.protocol.parseIncoming
+import com.yaokongqi.remote.model.GamepadSnapshot
+import com.yaokongqi.remote.model.RemoteInputMode
 import com.yaokongqi.remote.storage.DeviceHistoryStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +73,7 @@ class ConnectionManager(
     private var heartbeatJob: Job? = null
     private var qualityJob: Job? = null
     private var moveFlushJob: Job? = null
+    private var gamepadSendJob: Job? = null
     private var sessionToken: String? = null
     private var activeHost: String? = null
     private var connectedPcName: String? = null
@@ -97,6 +102,18 @@ class ConnectionManager(
     @Volatile
     private var showConnectionNotification = true
 
+    @Volatile
+    private var remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
+
+    @Volatile
+    private var gamepadPollHz = 180
+
+    @Volatile
+    private var gamepadSnapshot = GamepadSnapshot()
+
+    private val _gamepadError = MutableStateFlow<String?>(null)
+    val gamepadError: StateFlow<String?> = _gamepadError.asStateFlow()
+
     private val _info = MutableStateFlow(ConnectionInfo())
     val info: StateFlow<ConnectionInfo> = _info.asStateFlow()
 
@@ -119,6 +136,39 @@ class ConnectionManager(
     }
 
     private fun canSendPcInput(): Boolean = pcInputEnabled && sessionToken != null
+
+    private fun canSendKeyboardMouse(): Boolean =
+        canSendPcInput() && remoteInputMode == RemoteInputMode.KEYBOARD_MOUSE
+
+    private fun canSendGamepad(): Boolean =
+        canSendPcInput() && remoteInputMode == RemoteInputMode.GAMEPAD
+
+    fun setRemoteInputMode(mode: RemoteInputMode, pollHz: Int = gamepadPollHz) {
+        gamepadPollHz = pollHz.coerceIn(60, 250)
+        if (remoteInputMode == mode && mode != RemoteInputMode.GAMEPAD) return
+        remoteInputMode = mode
+        _gamepadError.value = null
+        if (mode == RemoteInputMode.GAMEPAD) {
+            stopMoveFlusher()
+            sendInputModeMessage("gamepad")
+            startGamepadSender()
+        } else {
+            stopGamepadSender()
+            sendZeroGamepad()
+            sendInputModeMessage("keyboard_mouse")
+            if (_info.value.state == ConnectionState.Connected) {
+                startMoveFlusher()
+            }
+        }
+    }
+
+    fun updateGamepadSnapshot(snapshot: GamepadSnapshot) {
+        gamepadSnapshot = snapshot
+    }
+
+    fun clearGamepadError() {
+        _gamepadError.value = null
+    }
 
     fun hasSavedSession(): Boolean {
         val device = deviceStore.lastDevice() ?: return false
@@ -241,6 +291,12 @@ class ConnectionManager(
                         startQualityProbe(webSocket, gen)
                     }
                     "error" -> {
+                        if (msg.code == "GAMEPAD_UNAVAILABLE") {
+                            _gamepadError.value = msg.msg ?: "PC 未安装 ViGEmBus 驱动"
+                            remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
+                            stopGamepadSender()
+                            return
+                        }
                         if (msg.code == "AUTH_FAILED") {
                             deviceStore.invalidateToken(host)
                         }
@@ -289,6 +345,10 @@ class ConnectionManager(
         stopHeartbeat()
         stopQualityProbe()
         stopMoveFlusher()
+        stopGamepadSender()
+        remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
+        gamepadSnapshot = GamepadSnapshot()
+        _gamepadError.value = null
         stopConnectionService()
         sessionToken = null
         activeHost = null
@@ -307,6 +367,12 @@ class ConnectionManager(
             }
             "pong" -> onPongReceived(msg.seq ?: 0)
             "error" -> {
+                if (msg.code == "GAMEPAD_UNAVAILABLE") {
+                    _gamepadError.value = msg.msg ?: "PC 未安装 ViGEmBus 驱动"
+                    remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
+                    stopGamepadSender()
+                    return
+                }
                 webSocket?.close(4000, msg.code)
                 cleanupConnection()
                 _info.value = ConnectionInfo(
@@ -399,19 +465,19 @@ class ConnectionManager(
     }
 
     fun sendKey(vk: Int, mods: Int) {
-        if (!canSendPcInput()) return
+        if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
         webSocket?.send(encodeKey(token, vk, mods))
     }
 
     fun sendCombo(vk: Int, mods: Int) {
-        if (!canSendPcInput()) return
+        if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
         webSocket?.send(encodeCombo(token, vk, mods))
     }
 
     fun sendMouseMove(dx: Float, dy: Float) {
-        if (!canSendPcInput()) return
+        if (!canSendKeyboardMouse()) return
         if (dx == 0f && dy == 0f) return
         val flushNow = synchronized(this) {
             moveAccumX += dx
@@ -424,7 +490,7 @@ class ConnectionManager(
     }
 
     fun sendMouseClick(button: String, action: String = "tap") {
-        if (!canSendPcInput()) return
+        if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
         webSocket?.send(encodeMouseClick(token, button, action))
     }
@@ -436,7 +502,7 @@ class ConnectionManager(
     fun sendMouseRightClick() = sendMouseClick("right", "tap")
 
     fun sendMouseScroll(deltaY: Int = 0, deltaX: Int = 0) {
-        if (!canSendPcInput()) return
+        if (!canSendKeyboardMouse()) return
         if (deltaY == 0 && deltaX == 0) return
         val token = sessionToken ?: return
         webSocket?.send(encodeMouseScroll(token, deltaY, deltaX))
@@ -541,7 +607,7 @@ class ConnectionManager(
     }
 
     private fun flushPendingMove() {
-        if (!canSendPcInput()) return
+        if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
         val ws = webSocket ?: return
         val (dx, dy) = synchronized(this) {
@@ -554,6 +620,47 @@ class ConnectionManager(
         if (dx != 0 || dy != 0) {
             ws.send(encodeMouseMove(token, dx, dy))
         }
+    }
+
+    private fun sendInputModeMessage(mode: String) {
+        val token = sessionToken ?: return
+        webSocket?.send(encodeInputMode(token, mode, gamepadPollHz))
+    }
+
+    private fun sendZeroGamepad() {
+        val token = sessionToken ?: return
+        webSocket?.send(encodeGamepad(token, 0, 0, 0, 0, 0, 0, 0))
+    }
+
+    private fun startGamepadSender() {
+        stopGamepadSender()
+        val intervalMs = (1000.0 / gamepadPollHz).coerceAtLeast(4.0).toLong()
+        gamepadSendJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                if (!canSendGamepad()) break
+                val token = sessionToken ?: break
+                val ws = webSocket ?: break
+                val snap = gamepadSnapshot
+                ws.send(
+                    encodeGamepad(
+                        token,
+                        snap.lx,
+                        snap.ly,
+                        snap.rx,
+                        snap.ry,
+                        snap.lt,
+                        snap.rt,
+                        snap.buttons,
+                    ),
+                )
+                delay(intervalMs)
+            }
+        }
+    }
+
+    private fun stopGamepadSender() {
+        gamepadSendJob?.cancel()
+        gamepadSendJob = null
     }
 
     private fun cancelScheduledReconnect() {

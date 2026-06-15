@@ -32,9 +32,11 @@ class MainActivity : ComponentActivity() {
                 val darkTheme = settings.darkMode
                 SideEffect {
                     val window = window
-                    WindowCompat.getInsetsController(window, view).apply {
-                        isAppearanceLightStatusBars = !darkTheme
-                        isAppearanceLightNavigationBars = !darkTheme
+                    if (!settings.shooterGamepadMode) {
+                        WindowCompat.getInsetsController(window, view).apply {
+                            isAppearanceLightStatusBars = !darkTheme
+                            isAppearanceLightNavigationBars = !darkTheme
+                        }
                     }
                 }
                 MainScreen(

@@ -150,5 +150,38 @@ fun encodeTextInput(token: String, text: String): String =
 fun encodeSystem(token: String, action: String): String =
     json.encodeToString(SystemMessage.serializer(), SystemMessage(token = token, action = action))
 
+fun encodeInputMode(token: String, mode: String, hz: Int = 180): String =
+    buildString(64 + token.length) {
+        append("{\"type\":\"input_mode\",\"token\":\"")
+        append(token)
+        append("\",\"mode\":\"")
+        append(mode)
+        append("\",\"hz\":")
+        append(hz.coerceIn(60, 250))
+        append('}')
+    }
+
+fun encodeGamepad(
+    token: String,
+    lx: Int,
+    ly: Int,
+    rx: Int,
+    ry: Int,
+    lt: Int = 0,
+    rt: Int = 0,
+    buttons: Int = 0,
+): String = buildString(96 + token.length) {
+    append("{\"type\":\"gamepad\",\"token\":\"")
+    append(token)
+    append("\",\"lx\":").append(lx)
+    append(",\"ly\":").append(ly)
+    append(",\"rx\":").append(rx)
+    append(",\"ry\":").append(ry)
+    append(",\"lt\":").append(lt.coerceIn(0, 255))
+    append(",\"rt\":").append(rt.coerceIn(0, 255))
+    append(",\"buttons\":").append(buttons)
+    append('}')
+}
+
 fun parseIncoming(raw: String): IncomingMessage =
     json.decodeFromString(IncomingMessage.serializer(), raw)

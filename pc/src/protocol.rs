@@ -56,6 +56,38 @@ pub enum ClientMessage {
         #[serde(default)]
         ts: u64,
     },
+    #[serde(rename = "input_mode")]
+    InputMode {
+        token: String,
+        mode: RemoteInputMode,
+        #[serde(default = "default_gamepad_hz")]
+        hz: u8,
+    },
+    #[serde(rename = "gamepad")]
+    Gamepad {
+        token: String,
+        lx: i16,
+        ly: i16,
+        rx: i16,
+        ry: i16,
+        #[serde(default)]
+        lt: u8,
+        #[serde(default)]
+        rt: u8,
+        #[serde(default)]
+        buttons: u16,
+    },
+}
+
+fn default_gamepad_hz() -> u8 {
+    180
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteInputMode {
+    KeyboardMouse,
+    Gamepad,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

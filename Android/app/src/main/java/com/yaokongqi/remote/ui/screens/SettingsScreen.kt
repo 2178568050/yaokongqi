@@ -27,6 +27,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -37,12 +38,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.yaokongqi.remote.model.AppSettings
 import com.yaokongqi.remote.model.LayoutMode
 import com.yaokongqi.remote.model.TouchSensitivity
 import com.yaokongqi.remote.ui.MainViewModel
 import com.yaokongqi.remote.ui.theme.Primary
+import com.yaokongqi.remote.ui.util.findActivity
+import com.yaokongqi.remote.ui.util.setGamepadLandscapeLock
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -52,6 +56,7 @@ fun SettingsScreen(
     onSaved: () -> Unit,
 ) {
     var draft by remember { mutableStateOf<AppSettings?>(null) }
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) {
         draft = viewModel.loadSettingsForEdit()
@@ -213,6 +218,170 @@ fun SettingsScreen(
                 }
             }
 
+            SettingsSection(title = "射击游戏（虚拟手柄）") {
+                RowSwitch(
+                    title = "射击游戏模式",
+                    subtitle = "横屏虚拟 Xbox 手柄；PC 需安装 ViGEmBus 驱动，游戏内请拔掉实体手柄",
+                    checked = current.shooterGamepadMode,
+                    onCheckedChange = { draft = current.copy(shooterGamepadMode = it) },
+                )
+                if (current.shooterGamepadMode) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                    Text(
+                        "输入刷新率：${current.gamepadPollHz} Hz（竞技建议 180~250）",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(125, 180, 250).forEach { hz ->
+                            FilterChip(
+                                selected = current.gamepadPollHz == hz,
+                                onClick = { draft = current.copy(gamepadPollHz = hz) },
+                                label = { Text("${hz}Hz") },
+                            )
+                        }
+                    }
+                    GamepadSliderSetting(
+                        label = "移动灵敏度",
+                        value = current.moveSensitivity,
+                        range = AppSettings.MOVE_SENS_MIN..AppSettings.MOVE_SENS_MAX,
+                        hint = "左半屏移动轮盘",
+                        onChange = { draft = current.copy(moveSensitivity = it) },
+                    )
+                    Text(
+                        "腰射瞄准（右半屏，水平 / 垂直可分别调节）",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                    GamepadSliderSetting(
+                        label = "腰射水平灵敏度",
+                        value = current.aimSensitivityX,
+                        range = AppSettings.AIM_SENS_X_MIN..AppSettings.AIM_SENS_X_MAX,
+                        hint = "左右滑动转身；小屏建议 3~6",
+                        onChange = {
+                            draft = current.copy(
+                                aimSensitivityX = it,
+                                aimSensitivity = it,
+                            )
+                        },
+                    )
+                    GamepadSliderSetting(
+                        label = "腰射垂直灵敏度",
+                        value = current.aimSensitivityY,
+                        range = AppSettings.AIM_SENS_Y_MIN..AppSettings.AIM_SENS_Y_MAX,
+                        hint = "上下滑动压枪 / 看天看地",
+                        onChange = { draft = current.copy(aimSensitivityY = it) },
+                    )
+                    Text(
+                        "开镜灵敏度（按住开镜键时生效）",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                    GamepadSliderSetting(
+                        label = "开镜水平灵敏度",
+                        value = current.adsAimSensitivityX,
+                        range = AppSettings.AIM_SENS_X_MIN..AppSettings.AIM_SENS_X_MAX,
+                        hint = "开镜时左右瞄准；通常低于腰射",
+                        onChange = { draft = current.copy(adsAimSensitivityX = it) },
+                    )
+                    GamepadSliderSetting(
+                        label = "开镜垂直灵敏度",
+                        value = current.adsAimSensitivityY,
+                        range = AppSettings.AIM_SENS_Y_MIN..AppSettings.AIM_SENS_Y_MAX,
+                        hint = "开镜时上下压枪",
+                        onChange = { draft = current.copy(adsAimSensitivityY = it) },
+                    )
+                    GamepadSliderSetting(
+                        label = "滑动加速度",
+                        value = current.aimSwipeAcceleration,
+                        range = AppSettings.AIM_SWIPE_ACCEL_MIN..AppSettings.AIM_SWIPE_ACCEL_MAX,
+                        hint = "快速滑动额外加速，便于转身；0 为匀速，建议 1.5~3",
+                        onChange = { draft = current.copy(aimSwipeAcceleration = it) },
+                    )
+                    GamepadSliderSetting(
+                        label = "瞄准平滑过滤",
+                        value = current.aimSmoothing,
+                        range = AppSettings.AIM_SMOOTHING_MIN..AppSettings.AIM_SMOOTHING_MAX,
+                        hint = "越大越稳、越小越跟手；快速甩枪时自动减弱",
+                        onChange = { draft = current.copy(aimSmoothing = it) },
+                    )
+                    GamepadSliderSetting(
+                        label = "移动死区",
+                        value = current.moveDeadzone,
+                        range = AppSettings.MOVE_DEADZONE_MIN..AppSettings.MOVE_DEADZONE_MAX,
+                        hint = "左轮盘中心无响应区域，越大越不易误触",
+                        onChange = { draft = current.copy(moveDeadzone = it) },
+                    )
+                    GamepadSliderSetting(
+                        label = "瞄准松手衰减",
+                        value = current.aimDecay,
+                        range = AppSettings.AIM_DECAY_MIN..AppSettings.AIM_DECAY_MAX,
+                        hint = "松手后准星惯性衰减，越大滑停越慢；越小停得越快",
+                        onChange = { draft = current.copy(aimDecay = it) },
+                    )
+                    GamepadSliderSetting(
+                        label = "控件透明度（全局）",
+                        value = current.gamepadControlAlpha,
+                        range = AppSettings.GAMEPAD_ALPHA_MIN..AppSettings.GAMEPAD_ALPHA_MAX,
+                        onChange = { draft = current.copy(gamepadControlAlpha = it) },
+                    )
+                    Text(
+                        "游戏中仅按键与移动轮盘可见；瞄准区游戏中透明，编辑布局时显示参考框",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    RowSwitch(
+                        title = "非固定移动轮盘",
+                        subtitle = "关闭时左下固定小轮盘（推荐）；开启则在触点出现轮盘",
+                        checked = current.gamepadFloatingStick,
+                        onCheckedChange = { draft = current.copy(gamepadFloatingStick = it) },
+                    )
+                    Text(
+                        "左半屏移动、右半屏瞄准；编辑布局中可为每个键单独调大小与透明度",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.saveSettings(current)
+                            context.findActivity()?.setGamepadLandscapeLock(true)
+                            viewModel.requestGamepadLayoutEdit()
+                            onSaved()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                    ) {
+                        Text("编辑按键布局")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            draft = viewModel.resetGamepadLayout(current)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                    ) {
+                        Text("恢复 Apex 默认布局")
+                    }
+                    Button(
+                        onClick = {
+                            val updated = current.copy(shooterGamepadMode = false)
+                            viewModel.saveSettings(updated)
+                            draft = updated
+                            onSaved()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                    ) {
+                        Text("退出游戏模式")
+                    }
+                }
+            }
+
             SettingsSection(title = "设备") {
                 Text("已保存：${viewModel.savedPcName ?: viewModel.savedHost ?: "无"}")
                 Text(
@@ -266,6 +435,33 @@ private fun SettingsBottomBar(onSave: () -> Unit, onCancel: () -> Unit) {
             Text("取消")
         }
     }
+}
+
+@Composable
+private fun GamepadSliderSetting(
+    label: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    hint: String? = null,
+    onChange: (Float) -> Unit,
+) {
+    Text(
+        "$label：${"%.2f".format(value)}",
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    if (hint != null) {
+        Text(
+            hint,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Slider(
+        value = value.coerceIn(range.start, range.endInclusive),
+        onValueChange = onChange,
+        valueRange = range,
+    )
 }
 
 @Composable

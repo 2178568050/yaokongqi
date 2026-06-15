@@ -33,6 +33,8 @@ private const val EDGE_SWIPE_MAX_X = 56f
 fun ExitConfirmLayer(
     enabled: Boolean,
     onExit: () -> Unit,
+    /** 游戏模式：监听左右边缘滑动手势，降低全面屏返回误触 */
+    gameMode: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     if (!enabled) {
@@ -72,17 +74,19 @@ fun ExitConfirmLayer(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            // 仅监听屏幕左缘滑动手势，避免与触摸板/按键区域的手势冲突
-            .pointerInput(Unit) {
+            .pointerInput(gameMode) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    if (down.position.x > EDGE_SWIPE_MAX_X) return@awaitEachGesture
+                    val edgeMax = if (gameMode) 72f else EDGE_SWIPE_MAX_X
+                    val onLeftEdge = down.position.x <= edgeMax
+                    val onRightEdge = gameMode && down.position.x >= size.width - edgeMax
+                    if (!onLeftEdge && !onRightEdge) return@awaitEachGesture
                     var totalDrag = 0f
                     do {
                         val event = awaitPointerEvent()
                         val drag = event.changes.firstOrNull { it.id == down.id } ?: break
                         val delta = drag.position - drag.previousPosition
-                        totalDrag += delta.x
+                        totalDrag += if (onRightEdge) -delta.x else delta.x
                     } while (event.changes.any { it.pressed })
                     if (abs(totalDrag) >= SWIPE_THRESHOLD_PX) {
                         registerSwipe()
@@ -103,7 +107,7 @@ fun ExitConfirmLayer(
                     .padding(horizontal = 20.dp, vertical = 12.dp),
             ) {
                 Text(
-                    text = "再滑动一次退出应用",
+                    text = if (gameMode) "再滑动一次退出游戏" else "再滑动一次退出应用",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

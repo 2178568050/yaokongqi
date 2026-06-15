@@ -7,7 +7,7 @@ package com.yaokongqi.remote.legal
 object LegalTexts {
     const val APP_NAME = "遥控器"
     const val APP_NAME_EN = "Yaokongqi"
-    const val VERSION = "0.1.3"
+    const val VERSION = "0.2.0"
     const val COPYRIGHT = "版权所有 © 2026 GZH"
     const val LICENSE_NAME = "GNU Affero General Public License v3.0 (AGPL-3.0)"
     const val CONTACT_EMAIL = "2178568050@qq.com"

@@ -12,10 +12,11 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 use crate::auth::AppConfig;
 use crate::config::{APP_MAGIC, LISTEN_PORT, WS_PATH};
 use crate::input::{
-    enqueue_combo, enqueue_key, enqueue_mouse_click, enqueue_mouse_move, enqueue_mouse_scroll,
-    enqueue_release_all, enqueue_system_shutdown, enqueue_text,
+    apply_gamepad_snapshot, enqueue_combo, enqueue_key, enqueue_mouse_click, enqueue_mouse_move,
+    enqueue_mouse_scroll, enqueue_release_all, enqueue_system_shutdown, enqueue_text,
+    gamepad_mode_active, release_gamepad, set_gamepad_mode, vigem_available, GamepadSnapshot,
 };
-use crate::protocol::{ClientMessage, ServerMessage, SystemAction};
+use crate::protocol::{ClientMessage, RemoteInputMode, ServerMessage, SystemAction};
 
 struct ActiveSession {
     id: u64,
@@ -124,6 +125,7 @@ async fn handle_connection(
     };
 
     if should_release {
+        release_gamepad();
         enqueue_release_all();
     }
     Ok(())
@@ -140,6 +142,66 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
 
     match msg {
         ClientMessage::Ping { seq, ts } => Some(ServerMessage::Pong { seq, ts }.to_json()),
+
+        ClientMessage::InputMode { token, mode, hz } => {
+            let cfg = config.read().await;
+            if !cfg.verify_token(&token) {
+                return Some(ServerMessage::err("AUTH_FAILED", "invalid token").to_json());
+            }
+            drop(cfg);
+
+            match mode {
+                RemoteInputMode::KeyboardMouse => {
+                    set_gamepad_mode(false, hz);
+                    None
+                }
+                RemoteInputMode::Gamepad => {
+                    if !vigem_available() {
+                        return Some(
+                            ServerMessage::err(
+                                "GAMEPAD_UNAVAILABLE",
+                                "PC 未安装或未加载 ViGEmBus 驱动，无法使用虚拟手柄",
+                            )
+                            .to_json(),
+                        );
+                    }
+                    set_gamepad_mode(true, hz);
+                    None
+                }
+            }
+        }
+
+        ClientMessage::Gamepad {
+            token,
+            lx,
+            ly,
+            rx,
+            ry,
+            lt,
+            rt,
+            buttons,
+        } => {
+            let cfg = config.read().await;
+            if !cfg.verify_token(&token) {
+                return Some(ServerMessage::err("AUTH_FAILED", "invalid token").to_json());
+            }
+            drop(cfg);
+
+            if !gamepad_mode_active() {
+                return None;
+            }
+
+            apply_gamepad_snapshot(GamepadSnapshot {
+                thumb_lx: lx,
+                thumb_ly: ly,
+                thumb_rx: rx,
+                thumb_ry: ry,
+                left_trigger: lt,
+                right_trigger: rt,
+                buttons,
+            });
+            None
+        }
 
         ClientMessage::Pair { magic, pin, device } => {
             if magic != APP_MAGIC {
@@ -170,6 +232,9 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
             vk,
             mods,
         } => {
+            if gamepad_mode_active() {
+                return None;
+            }
             let cfg = config.read().await;
             if !cfg.verify_token(&token) {
                 return Some(ServerMessage::err("AUTH_FAILED", "invalid token").to_json());
@@ -181,6 +246,9 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
         }
 
         ClientMessage::Combo { token, vk, mods } => {
+            if gamepad_mode_active() {
+                return None;
+            }
             let cfg = config.read().await;
             if !cfg.verify_token(&token) {
                 return Some(ServerMessage::err("AUTH_FAILED", "invalid token").to_json());
@@ -192,6 +260,9 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
         }
 
         ClientMessage::MouseMove { token, dx, dy } => {
+            if gamepad_mode_active() {
+                return None;
+            }
             let cfg = config.read().await;
             if !cfg.verify_token(&token) {
                 return Some(ServerMessage::err("AUTH_FAILED", "invalid token").to_json());
@@ -203,6 +274,9 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
         }
 
         ClientMessage::MouseClick { token, button, action } => {
+            if gamepad_mode_active() {
+                return None;
+            }
             let cfg = config.read().await;
             if !cfg.verify_token(&token) {
                 return Some(ServerMessage::err("AUTH_FAILED", "invalid token").to_json());
@@ -214,6 +288,9 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
         }
 
         ClientMessage::MouseScroll { token, delta_y, delta_x } => {
+            if gamepad_mode_active() {
+                return None;
+            }
             let cfg = config.read().await;
             if !cfg.verify_token(&token) {
                 return Some(ServerMessage::err("AUTH_FAILED", "invalid token").to_json());

@@ -1,6 +1,6 @@
 [package]
 name = "yaokongqi"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 description = "遥控器 (Yaokongqi) — Windows 端远程输入接收服务"
 authors = ["GZH <2178568050@qq.com>"]
@@ -39,6 +39,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "serd
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
+vigem-client = "0.1"
 
 [profile.release]
 strip = true

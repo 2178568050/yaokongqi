@@ -89,6 +89,19 @@ PC 端采用 Rust 编写，托盘常驻、空闲低占用；Android 端采用 Ko
 - 极简滚轮模式：全屏只保留滚轮，长按退出
 - PC 托盘：显示 IP / PIN、刷新配对码、开机自启、关于与法律信息
 
+### 射击游戏模式（虚拟手柄）
+
+横屏将手机变为 **无线 Xbox 360 虚拟手柄**，适合 Apex 等支持手柄的 FPS（PC 需 [ViGEmBus](https://github.com/nefarius/ViGEmBus/releases)）：
+
+| 能力 | 说明 |
+|------|------|
+| 分区操作 | 左半屏移动轮盘 + 右半屏滑动瞄准 |
+| 自定义布局 | 拖动按键、调节大小/透明度，内置 Apex 默认预设 |
+| 分项灵敏度 | 腰射/开镜水平垂直独立、滑动加速度、平滑与松手衰减 |
+| 网络延迟 | 游戏界面顶部显示 RTT，便于判断网络是否适合竞技 |
+
+完整说明见 **[射击游戏模式使用文档](docs/GAMEPAD-MODE.md)**。更新记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 ---
 
 ## 使用方法
@@ -194,7 +207,7 @@ cd android
 |------|------|
 | [`android/`](android/) | Android 客户端（Kotlin + Compose） |
 | [`pc/`](pc/) | Windows 服务（Rust + 系统托盘） |
-| [`docs/`](docs/) | 协议、开发、法律文档 |
+| [`docs/`](docs/) | 协议、开发、法律文档；[射击游戏模式](docs/GAMEPAD-MODE.md)、[更新日志](../CHANGELOG.md) |
 | [`dist/`](dist/) | 本地发布包（构建产物，见 `.gitignore`） |
 
 ### 构建发布包
