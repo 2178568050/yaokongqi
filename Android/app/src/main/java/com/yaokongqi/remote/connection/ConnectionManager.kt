@@ -1,8 +1,10 @@
 package com.yaokongqi.remote.connection
 
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import com.yaokongqi.remote.AppConfig
+import com.yaokongqi.remote.service.RemoteService
 import com.yaokongqi.remote.protocol.encodeCombo
 import com.yaokongqi.remote.protocol.encodeKey
 import com.yaokongqi.remote.protocol.encodeMouseClick
@@ -33,6 +35,9 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
+private fun safeParseIncoming(text: String) =
+    runCatching { parseIncoming(text) }.getOrNull()
+
 enum class ConnectionState {
     Disconnected,
     Connecting,
@@ -52,6 +57,7 @@ class ConnectionManager(
     context: Context,
     private val scope: CoroutineScope,
 ) {
+    private val appContext = context.applicationContext
     private val deviceStore = DeviceHistoryStore(context)
     private val client = OkHttpClient.Builder()
         .pingInterval(30, TimeUnit.SECONDS)
@@ -71,12 +77,25 @@ class ConnectionManager(
     private val pendingPings = LinkedHashMap<Int, Long>()
     private val recentOutcomes = ArrayDeque<Boolean>()
     private var lastLatencyMs: Int? = null
+    private var connectionGeneration = 0
+    private var reconnectJob: Job? = null
+
+    @Volatile
+    private var userInitiatedDisconnect = false
+
+    private var reconnectAttempt = 0
 
     @Volatile
     private var moveAccumX = 0f
 
     @Volatile
     private var moveAccumY = 0f
+
+    @Volatile
+    private var pcInputEnabled = true
+
+    @Volatile
+    private var showConnectionNotification = true
 
     private val _info = MutableStateFlow(ConnectionInfo())
     val info: StateFlow<ConnectionInfo> = _info.asStateFlow()
@@ -86,10 +105,32 @@ class ConnectionManager(
     val savedHost: String? get() = deviceStore.lastDevice()?.host
     val savedPcName: String? get() = deviceStore.lastDevice()?.pcName
 
-    fun hasSavedSession(): Boolean = deviceStore.lastDevice() != null
+    fun setPcInputEnabled(enabled: Boolean) {
+        pcInputEnabled = enabled
+    }
+
+    fun setShowConnectionNotification(enabled: Boolean) {
+        showConnectionNotification = enabled
+        if (enabled && _info.value.state == ConnectionState.Connected) {
+            startConnectionService(_info.value.pcName ?: connectedPcName)
+        } else if (!enabled) {
+            stopConnectionService()
+        }
+    }
+
+    private fun canSendPcInput(): Boolean = pcInputEnabled && sessionToken != null
+
+    fun hasSavedSession(): Boolean {
+        val device = deviceStore.lastDevice() ?: return false
+        return device.token.isNotEmpty()
+    }
+
+    fun shouldAutoReconnect(): Boolean = !userInitiatedDisconnect && hasSavedSession()
 
     fun pair(host: String, pin: String) {
-        disconnect()
+        userInitiatedDisconnect = false
+        cancelScheduledReconnect()
+        val gen = beginNewConnection()
         _info.value = ConnectionInfo(state = ConnectionState.Connecting)
 
         val parsed = AppConfig.parseHost(host)
@@ -102,94 +143,109 @@ class ConnectionManager(
         }
 
         val hostToSave = parsed.host
+        val portToSave = parsed.port
         activeHost = hostToSave
-        val request = Request.Builder().url(AppConfig.wsUrl(host)).build()
+        val request = Request.Builder().url(AppConfig.wsUrl(hostToSave, portToSave)).build()
         val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
         val pairPayload = encodePair(AppConfig.APP_MAGIC, pin.trim(), deviceName)
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (gen != connectionGeneration) return
                 webSocket.send(pairPayload)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (gen != connectionGeneration) return
                 handleMessage(text) { token, pcName ->
                     sessionToken = token
                     connectedPcName = pcName
-                    deviceStore.upsert(hostToSave, token, pcName)
+                    deviceStore.upsert(hostToSave, token, pcName, portToSave)
                     markConnected(pcName)
-                    startHeartbeat(webSocket)
-                    startQualityProbe(webSocket)
+                    startHeartbeat(webSocket, gen)
+                    startQualityProbe(webSocket, gen)
                 }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (gen != connectionGeneration) return
                 cleanupConnection()
                 _info.value = ConnectionInfo(
                     state = ConnectionState.Error,
                     message = t.message ?: "连接失败",
                 )
+                scheduleReconnectAfterDrop()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (gen != connectionGeneration) return
                 val wasError = _info.value.state == ConnectionState.Error
                 cleanupConnection()
                 if (!wasError) {
                     _info.value = ConnectionInfo(state = ConnectionState.Disconnected)
+                    scheduleReconnectAfterDrop()
                 }
             }
         })
     }
 
     fun reconnectSaved() {
+        userInitiatedDisconnect = false
+        reconnectAttempt = 0
+        cancelScheduledReconnect()
         val device = deviceStore.lastDevice() ?: return
+        if (device.token.isEmpty()) return
         reconnectTo(device.host)
     }
 
     fun reconnectTo(host: String) {
         val device = deviceStore.device(host) ?: return
+        if (device.token.isEmpty()) return
         deviceStore.setLastHost(host)
-        connectWithToken(device.host, device.token, device.pcName)
+        connectWithToken(device.host, device.port, device.token, device.pcName)
     }
 
-    private fun connectWithToken(host: String, token: String, pcName: String?) {
-        disconnect()
+    private fun connectWithToken(host: String, port: Int, token: String, pcName: String?) {
+        val gen = beginNewConnection()
         _info.value = ConnectionInfo(state = ConnectionState.Connecting)
         sessionToken = token
         activeHost = host
         connectedPcName = pcName
 
-        val request = Request.Builder().url(AppConfig.wsUrl(host)).build()
+        val request = Request.Builder().url(AppConfig.wsUrl(host, port)).build()
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (gen != connectionGeneration) return
                 sendMeasuredPing(webSocket)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                val msg = parseIncoming(text)
+                if (gen != connectionGeneration) return
+                val msg = safeParseIncoming(text) ?: return
                 when (msg.type) {
                     "pong" -> {
                         onPongReceived(msg.seq ?: 0)
                         if (_info.value.state != ConnectionState.Connected) {
                             markConnected(pcName ?: deviceStore.device(host)?.pcName)
-                            startHeartbeat(webSocket)
-                            startQualityProbe(webSocket)
+                            startHeartbeat(webSocket, gen)
+                            startQualityProbe(webSocket, gen)
                         }
                     }
                     "paired" -> handleMessage(text) { t, name ->
                         sessionToken = t
                         connectedPcName = name
-                        deviceStore.upsert(host, t, name)
+                        deviceStore.upsert(host, t, name, port)
                         markConnected(name)
-                        startHeartbeat(webSocket)
-                        startQualityProbe(webSocket)
+                        startHeartbeat(webSocket, gen)
+                        startQualityProbe(webSocket, gen)
                     }
                     "error" -> {
                         if (msg.code == "AUTH_FAILED") {
                             deviceStore.invalidateToken(host)
                         }
                         webSocket.close(4001, msg.code)
+                        if (gen != connectionGeneration) return
                         cleanupConnection()
                         _info.value = ConnectionInfo(
                             state = ConnectionState.Error,
@@ -200,27 +256,40 @@ class ConnectionManager(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (gen != connectionGeneration) return
                 cleanupConnection()
                 _info.value = ConnectionInfo(
                     state = ConnectionState.Error,
                     message = t.message ?: "连接失败",
                 )
+                scheduleReconnectAfterDrop()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (gen != connectionGeneration) return
                 val wasError = _info.value.state == ConnectionState.Error
                 cleanupConnection()
                 if (!wasError) {
                     _info.value = ConnectionInfo(state = ConnectionState.Disconnected)
+                    scheduleReconnectAfterDrop()
                 }
             }
         })
+    }
+
+    private fun beginNewConnection(): Int {
+        connectionGeneration++
+        val gen = connectionGeneration
+        webSocket?.close(1000, "reconnecting")
+        cleanupConnection()
+        return gen
     }
 
     private fun cleanupConnection() {
         stopHeartbeat()
         stopQualityProbe()
         stopMoveFlusher()
+        stopConnectionService()
         sessionToken = null
         activeHost = null
         connectedPcName = null
@@ -229,7 +298,7 @@ class ConnectionManager(
     }
 
     private inline fun handleMessage(text: String, onPaired: (token: String, pcName: String) -> Unit) {
-        val msg = parseIncoming(text)
+        val msg = safeParseIncoming(text) ?: return
         when (msg.type) {
             "paired" -> {
                 val token = msg.token ?: return
@@ -249,6 +318,9 @@ class ConnectionManager(
     }
 
     private fun markConnected(pcName: String?) {
+        userInitiatedDisconnect = false
+        reconnectAttempt = 0
+        cancelScheduledReconnect()
         _info.value = ConnectionInfo(
             state = ConnectionState.Connected,
             pcName = pcName ?: connectedPcName,
@@ -256,6 +328,7 @@ class ConnectionManager(
             packetLossPercent = computePacketLoss(),
         )
         startMoveFlusher()
+        startConnectionService(pcName ?: connectedPcName)
     }
 
     private fun updateQualityFields() {
@@ -271,28 +344,38 @@ class ConnectionManager(
     private fun sendMeasuredPing(ws: WebSocket) {
         val seq = pingSeq.incrementAndGet()
         val now = System.currentTimeMillis()
-        pendingPings[seq] = now
-        trimPendingPings()
+        synchronized(this) {
+            pendingPings[seq] = now
+            trimPendingPingsLocked()
+        }
         ws.send(encodePing(seq, now))
     }
 
     private fun onPongReceived(seq: Int) {
-        val sentAt = pendingPings.remove(seq) ?: return
+        val sentAt = synchronized(this) {
+            pendingPings.remove(seq)
+        } ?: return
         val rtt = (System.currentTimeMillis() - sentAt).toInt().coerceAtLeast(0)
         lastLatencyMs = rtt
         recordOutcome(true)
         updateQualityFields()
     }
 
-    private fun trimPendingPings() {
+    private fun trimPendingPingsLocked() {
         while (pendingPings.size > 20) {
             val oldest = pendingPings.keys.first()
             pendingPings.remove(oldest)
-            recordOutcome(false)
+            recordOutcomeLocked(false)
         }
     }
 
     private fun recordOutcome(success: Boolean) {
+        synchronized(this) {
+            recordOutcomeLocked(success)
+        }
+    }
+
+    private fun recordOutcomeLocked(success: Boolean) {
         recentOutcomes.addLast(success)
         while (recentOutcomes.size > 20) {
             recentOutcomes.removeFirst()
@@ -300,29 +383,35 @@ class ConnectionManager(
     }
 
     private fun computePacketLoss(): Int {
-        if (recentOutcomes.isEmpty()) return 0
-        val lost = recentOutcomes.count { !it }
-        return (lost * 100 / recentOutcomes.size).coerceIn(0, 100)
+        val outcomes = synchronized(this) { recentOutcomes.toList() }
+        if (outcomes.isEmpty()) return 0
+        val lost = outcomes.count { !it }
+        return (lost * 100 / outcomes.size).coerceIn(0, 100)
     }
 
     private fun resetQualityStats() {
-        pendingPings.clear()
-        recentOutcomes.clear()
+        synchronized(this) {
+            pendingPings.clear()
+            recentOutcomes.clear()
+        }
         lastLatencyMs = null
         pingSeq.set(0)
     }
 
     fun sendKey(vk: Int, mods: Int) {
+        if (!canSendPcInput()) return
         val token = sessionToken ?: return
         webSocket?.send(encodeKey(token, vk, mods))
     }
 
     fun sendCombo(vk: Int, mods: Int) {
+        if (!canSendPcInput()) return
         val token = sessionToken ?: return
         webSocket?.send(encodeCombo(token, vk, mods))
     }
 
     fun sendMouseMove(dx: Float, dy: Float) {
+        if (!canSendPcInput()) return
         if (dx == 0f && dy == 0f) return
         val flushNow = synchronized(this) {
             moveAccumX += dx
@@ -335,6 +424,7 @@ class ConnectionManager(
     }
 
     fun sendMouseClick(button: String, action: String = "tap") {
+        if (!canSendPcInput()) return
         val token = sessionToken ?: return
         webSocket?.send(encodeMouseClick(token, button, action))
     }
@@ -346,18 +436,21 @@ class ConnectionManager(
     fun sendMouseRightClick() = sendMouseClick("right", "tap")
 
     fun sendMouseScroll(deltaY: Int = 0, deltaX: Int = 0) {
+        if (!canSendPcInput()) return
         if (deltaY == 0 && deltaX == 0) return
         val token = sessionToken ?: return
         webSocket?.send(encodeMouseScroll(token, deltaY, deltaX))
     }
 
     fun sendText(text: String) {
+        if (!canSendPcInput()) return
         if (text.isEmpty()) return
         val token = sessionToken ?: return
         webSocket?.send(encodeTextInput(token, text))
     }
 
     fun sendSystemShutdown() {
+        if (!canSendPcInput()) return
         val token = sessionToken ?: return
         webSocket?.send(encodeSystem(token, "shutdown"))
     }
@@ -367,8 +460,9 @@ class ConnectionManager(
     fun sendVolumeDown() = sendKey(0xAE, 0)
 
     fun disconnect() {
-        webSocket?.close(1000, "user disconnect")
-        cleanupConnection()
+        userInitiatedDisconnect = true
+        cancelScheduledReconnect()
+        beginNewConnection()
         _info.value = ConnectionInfo(state = ConnectionState.Disconnected)
     }
 
@@ -382,33 +476,37 @@ class ConnectionManager(
         deviceStore.clearAll()
     }
 
-    private fun startHeartbeat(ws: WebSocket) {
+    private fun startHeartbeat(ws: WebSocket, gen: Int) {
         stopHeartbeat()
         heartbeatJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(25_000)
                 val socket = webSocket ?: break
-                if (socket != ws) break
+                if (socket != ws || gen != connectionGeneration) break
                 sendMeasuredPing(socket)
             }
         }
     }
 
-    private fun startQualityProbe(ws: WebSocket) {
+    private fun startQualityProbe(ws: WebSocket, gen: Int) {
         stopQualityProbe()
         qualityJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(3_000)
                 val socket = webSocket ?: break
-                if (socket != ws) break
+                if (socket != ws || gen != connectionGeneration) break
                 sendMeasuredPing(socket)
                 delay(500)
-                val expired = pendingPings.entries.filter { (_, sentAt) ->
-                    System.currentTimeMillis() - sentAt > 2_000
+                val expired = synchronized(this@ConnectionManager) {
+                    pendingPings.entries.filter { (_, sentAt) ->
+                        System.currentTimeMillis() - sentAt > 2_000
+                    }
                 }
                 expired.forEach { (seq, _) ->
-                    pendingPings.remove(seq)
-                    recordOutcome(false)
+                    synchronized(this@ConnectionManager) {
+                        pendingPings.remove(seq)
+                        recordOutcomeLocked(false)
+                    }
                 }
                 updateQualityFields()
             }
@@ -443,6 +541,7 @@ class ConnectionManager(
     }
 
     private fun flushPendingMove() {
+        if (!canSendPcInput()) return
         val token = sessionToken ?: return
         val ws = webSocket ?: return
         val (dx, dy) = synchronized(this) {
@@ -457,9 +556,51 @@ class ConnectionManager(
         }
     }
 
+    private fun cancelScheduledReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+    }
+
+    private fun scheduleReconnectAfterDrop() {
+        if (userInitiatedDisconnect || !hasSavedSession()) return
+        if (reconnectAttempt >= MAX_AUTO_RECONNECT) return
+        reconnectJob?.cancel()
+        val attempt = reconnectAttempt
+        reconnectJob = scope.launch(Dispatchers.IO) {
+            delay(1500L + attempt * 800L)
+            if (userInitiatedDisconnect || !hasSavedSession()) return@launch
+            val state = _info.value.state
+            if (state == ConnectionState.Connected || state == ConnectionState.Connecting) return@launch
+            reconnectAttempt = attempt + 1
+            reconnectSaved()
+        }
+    }
+
+    private fun startConnectionService(pcName: String?) {
+        if (!showConnectionNotification) return
+        val label = pcName?.takeIf { it.isNotBlank() } ?: activeHost ?: "PC"
+        val intent = Intent(appContext, RemoteService::class.java).apply {
+            putExtra(RemoteService.EXTRA_PC_NAME, label)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                appContext.startForegroundService(intent)
+            } else {
+                appContext.startService(intent)
+            }
+        } catch (_: Exception) {
+            // 部分机型未授予通知权限时仍允许连接，仅前台保活可能受限
+        }
+    }
+
+    private fun stopConnectionService() {
+        appContext.stopService(Intent(appContext, RemoteService::class.java))
+    }
+
     private companion object {
         /** 兜底刷新间隔；主要依赖位移阈值即时发送 */
         const val MOVE_FLUSH_MS = 2L
         const val MOVE_FLUSH_THRESHOLD_PX = 0.45f
+        const val MAX_AUTO_RECONNECT = 6
     }
 }

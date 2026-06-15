@@ -45,7 +45,11 @@ object AppConfig {
 
     fun wsUrl(input: String): String {
         val parsed = parseHost(input)
-        require(parsed.host.isNotEmpty()) { "IP 地址不能为空" }
-        return "ws://${parsed.host}:${parsed.port}$WS_PATH"
+        return wsUrl(parsed.host, parsed.port)
+    }
+
+    fun wsUrl(host: String, port: Int): String {
+        require(host.isNotEmpty()) { "IP 地址不能为空" }
+        return "ws://$host:$port$WS_PATH"
     }
 }

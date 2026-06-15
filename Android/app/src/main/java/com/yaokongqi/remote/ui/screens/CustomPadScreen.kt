@@ -713,6 +713,12 @@ fun TouchpadArea(
     var pendingSingleTap by remember { mutableStateOf<Job?>(null) }
     var lastTapAt by remember { mutableLongStateOf(0L) }
 
+    LaunchedEffect(inputSessionKey) {
+        pendingSingleTap?.cancel()
+        pendingSingleTap = null
+        lastTapAt = 0L
+    }
+
     fun handleTap() {
         val now = System.currentTimeMillis()
         if (pendingSingleTap?.isActive == true) {

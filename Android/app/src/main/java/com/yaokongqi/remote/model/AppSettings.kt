@@ -13,4 +13,6 @@ data class AppSettings(
     val showTouchpadHint: Boolean = false,
     /** 横屏时左右分栏：左侧按键、中间留白、右侧触摸板 */
     val landscapeSplitLayout: Boolean = true,
+    /** 连接时在通知栏显示前台服务通知（有助于锁屏保活） */
+    val showConnectionNotification: Boolean = true,
 )

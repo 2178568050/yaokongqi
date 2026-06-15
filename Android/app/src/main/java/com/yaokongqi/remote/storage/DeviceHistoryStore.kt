@@ -38,11 +38,11 @@ class DeviceHistoryStore(context: Context) {
         _history.value = history
     }
 
-    fun upsert(host: String, token: String, pcName: String) {
+    fun upsert(host: String, token: String, pcName: String, port: Int = com.yaokongqi.remote.AppConfig.LISTEN_PORT) {
         val current = load()
         val others = current.devices.filter { it.host != host }
         val updated = DeviceHistory(
-            devices = listOf(SavedDevice(host, token, pcName)) + others,
+            devices = listOf(SavedDevice(host, token, pcName, port)) + others,
             lastHost = host,
         )
         persist(updated)

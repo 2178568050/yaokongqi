@@ -46,7 +46,7 @@ class ButtonLayoutStore(context: Context) {
         val current = _layout.value
         val mode = layoutMode ?: current.layoutMode
         if (mode == LayoutMode.FULL_KEYBOARD) return false
-        val activeButtons = current.buttons.take(mode.maxButtons)
+        val activeButtons = trimButtons(current.buttons, mode.maxButtons)
         if (activeButtons.size >= mode.maxButtons) return false
         val toAdd = if (mode.isGrid) {
             val columns = mode.columns
@@ -57,22 +57,40 @@ class ButtonLayoutStore(context: Context) {
         } else {
             button
         }
-        save(current.copy(buttons = current.buttons + toAdd))
+        save(
+            current.copy(
+                layoutMode = mode,
+                columns = mode.columns,
+                buttons = activeButtons + toAdd,
+            ),
+        )
         return true
     }
 
-    fun updateButton(button: RemoteButton) {
+    fun updateButton(button: RemoteButton, layoutMode: LayoutMode? = null) {
         val current = _layout.value
+        val mode = layoutMode ?: current.layoutMode
+        val activeButtons = trimButtons(current.buttons, mode.maxButtons)
         save(
             current.copy(
-                buttons = current.buttons.map { if (it.id == button.id) button else it },
+                layoutMode = mode,
+                columns = mode.columns,
+                buttons = activeButtons.map { if (it.id == button.id) button else it },
             ),
         )
     }
 
-    fun removeButton(id: String) {
+    fun removeButton(id: String, layoutMode: LayoutMode? = null) {
         val current = _layout.value
-        save(current.copy(buttons = current.buttons.filter { it.id != id }))
+        val mode = layoutMode ?: current.layoutMode
+        val activeButtons = trimButtons(current.buttons, mode.maxButtons)
+        save(
+            current.copy(
+                layoutMode = mode,
+                columns = mode.columns,
+                buttons = activeButtons.filter { it.id != id },
+            ),
+        )
     }
 
     fun resetDefault() {

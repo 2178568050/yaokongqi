@@ -140,7 +140,10 @@ fun SettingsScreen(
                         FilterChip(
                             selected = current.layoutMode == mode,
                             onClick = {
-                                if (layoutEditable) draft = current.copy(layoutMode = mode)
+                                if (layoutEditable) {
+                                    draft = current.copy(layoutMode = mode)
+                                    viewModel.applyLayoutModeForEdit(mode)
+                                }
                             },
                             enabled = layoutEditable,
                             label = { Text(mode.label) },
@@ -217,6 +220,13 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp),
+                )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+                RowSwitch(
+                    title = "连接状态通知",
+                    subtitle = "在通知栏显示已连接设备；开启有助于锁屏时保持连接",
+                    checked = current.showConnectionNotification,
+                    onCheckedChange = { draft = current.copy(showConnectionNotification = it) },
                 )
             }
 

@@ -113,14 +113,19 @@ async fn handle_connection(
 
     log::info!("客户端断开: {peer}");
 
-    {
+    let should_release = {
         let mut guard = ACTIVE_SESSION.lock().await;
         if guard.as_ref().is_some_and(|session| session.id == session_id) {
             *guard = None;
+            true
+        } else {
+            false
         }
-    }
+    };
 
-    enqueue_release_all();
+    if should_release {
+        enqueue_release_all();
+    }
     Ok(())
 }
 

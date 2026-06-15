@@ -6,6 +6,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import kotlin.math.abs
@@ -52,25 +53,29 @@ fun Modifier.laptopTrackpadGestures(
         var maxFingers = 1
         var longPressTriggered = false
         var multiTouchSteal = false
-        val downAt = System.currentTimeMillis()
+        var lastEventCancelled = false
+
+        TrackpadLongPressController.schedule(LONG_PRESS_MS) {
+            if (!moved && maxFingers == 1 && !longPressTriggered) {
+                longPressTriggered = true
+                if (scrollOnly) {
+                    callbacks.onLongPress?.invoke()
+                } else {
+                    callbacks.onRightClick()
+                }
+            }
+        }
 
         try {
             do {
-                if (!longPressTriggered && !moved && maxFingers == 1) {
-                    if (System.currentTimeMillis() - downAt >= LONG_PRESS_MS) {
-                        longPressTriggered = true
-                        if (scrollOnly) {
-                            callbacks.onLongPress?.invoke()
-                        } else {
-                            callbacks.onRightClick()
-                        }
-                    }
-                }
-
                 val pass = if (multiTouchSteal) PointerEventPass.Initial else PointerEventPass.Main
                 val event = awaitPointerEvent(pass)
                 val pressed = event.changes.filter { it.pressed }
                 maxFingers = maxOf(maxFingers, pressed.size)
+
+                if (maxFingers != 1 || moved) {
+                    TrackpadLongPressController.cancelAll()
+                }
 
                 if (maxFingers >= 3 && !multiTouchSteal) {
                     multiTouchSteal = true
@@ -97,6 +102,10 @@ fun Modifier.laptopTrackpadGestures(
 
                 event.changes.filter { !it.pressed }.forEach { change ->
                     positions.remove(change.id)
+                }
+
+                lastEventCancelled = event.changes.any { change ->
+                    change.previousPressed && !change.pressed && !change.changedToUp()
                 }
 
                 val fingers = pressed.size
@@ -132,10 +141,13 @@ fun Modifier.laptopTrackpadGestures(
                 }
             } while (event.changes.any { it.pressed })
         } finally {
+            TrackpadLongPressController.cancelAll()
             if (multiTouchSteal) {
                 callbacks.onMultiTouchActive(false)
             }
         }
+
+        if (lastEventCancelled) return@awaitEachGesture
 
         if (longPressTriggered) return@awaitEachGesture
 
@@ -143,7 +155,6 @@ fun Modifier.laptopTrackpadGestures(
             when (maxFingers) {
                 1 -> callbacks.onSingleClick()
                 2 -> callbacks.onRightClick()
-                in 3..Int.MAX_VALUE -> callbacks.onThreeFingerSwipeUp()
             }
             return@awaitEachGesture
         }
@@ -175,8 +186,8 @@ private fun dispatchMultiFingerSwipe(
         }
         totalMoveY < -SWIPE_THRESHOLD_PX -> callbacks.onThreeFingerSwipeUp()
         fingerTier >= 4 && totalMoveY > SWIPE_THRESHOLD_PX -> {
-            // 四指下滑：备用映射任务视图（与系统三指截图方向错开）
-            callbacks.onThreeFingerSwipeUp()
+            // 四指下滑：切换上一个窗口（Alt+Shift+Tab），避免与上滑 Win+Tab 重复
+            callbacks.onThreeFingerSwipeLeft()
         }
     }
 }

@@ -19,6 +19,7 @@ import com.yaokongqi.remote.model.TouchSensitivity
 import com.yaokongqi.remote.storage.AppSettingsStore
 import com.yaokongqi.remote.storage.ButtonLayoutStore
 import com.yaokongqi.remote.storage.LayoutPresetStore
+import com.yaokongqi.remote.ui.gesture.TrackpadLongPressController
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,6 +63,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         applyPersistedSettings()
+        manager.setShowConnectionNotification(settingsStore.load().showConnectionNotification)
         presetStore.ensureBuiltinPresets()
         presetStore.ensureDefaultPreset(layoutStore.load())
         applyActivePreset()
@@ -150,7 +152,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun requestVolumeUp() {
         if (_volumeUpPressCount.value >= VOLUME_UP_CONFIRM_THRESHOLD) {
-            _volumeConfirmPending.value = true
+            if (!_volumeConfirmPending.value) {
+                _volumeConfirmPending.value = true
+            }
             return
         }
         manager.sendVolumeUp()
@@ -208,22 +212,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun addButton(button: RemoteButton, layoutMode: LayoutMode? = null): Boolean {
         if (isActivePresetBuiltin()) return false
-        return layoutStore.addButton(button, layoutMode)
+        val ok = layoutStore.addButton(button, layoutMode)
+        if (ok) persistActivePresetLayout()
+        return ok
     }
 
-    fun updateButton(button: RemoteButton) {
+    fun updateButton(button: RemoteButton, layoutMode: LayoutMode? = null) {
         if (isActivePresetBuiltin()) return
-        layoutStore.updateButton(button)
+        layoutStore.updateButton(button, layoutMode)
+        persistActivePresetLayout()
     }
 
-    fun removeButton(id: String) {
+    fun removeButton(id: String, layoutMode: LayoutMode? = null) {
         if (isActivePresetBuiltin()) return
-        layoutStore.removeButton(id)
+        layoutStore.removeButton(id, layoutMode)
+        persistActivePresetLayout()
     }
 
     fun resetLayout() {
         if (isActivePresetBuiltin()) return
         layoutStore.resetDefault()
+        persistActivePresetLayout()
+    }
+
+    fun applyLayoutModeForEdit(mode: LayoutMode) {
+        if (isActivePresetBuiltin()) return
+        layoutStore.setLayoutMode(mode)
+        settingsDraft = settingsDraft.copy(layoutMode = mode)
+        persistActivePresetLayout()
     }
 
     fun saveCurrentAsPreset(name: String) {
@@ -276,6 +292,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         settingsDraft = settings
         settingsStore.save(settings)
         settingsStore.updateDraft(settings)
+        manager.setShowConnectionNotification(settings.showConnectionNotification)
         if (isActiveLayoutEditable()) {
             layoutStore.setLayoutMode(settings.layoutMode)
             persistActivePresetLayout()
@@ -289,7 +306,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         settingsStore.updateDraft(saved)
         layoutSnapshot?.let { layoutStore.save(it) }
         layoutSnapshot = null
-        applyActivePreset()
     }
 
     fun showTextInput() {
@@ -313,9 +329,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onAppForeground() {
-        if (connectionInfo.value.state == ConnectionState.Connected) {
-            bumpInputSession()
+        manager.setPcInputEnabled(true)
+        when (connectionInfo.value.state) {
+            ConnectionState.Connected -> bumpInputSession()
+            ConnectionState.Connecting -> Unit
+            ConnectionState.Disconnected, ConnectionState.Error -> {
+                if (manager.shouldAutoReconnect()) {
+                    reconnect()
+                }
+            }
         }
+    }
+
+    fun onAppBackground() {
+        manager.setPcInputEnabled(false)
+        TrackpadLongPressController.cancelAll()
+        bumpInputSession()
     }
 
     fun resetSessionUi() {

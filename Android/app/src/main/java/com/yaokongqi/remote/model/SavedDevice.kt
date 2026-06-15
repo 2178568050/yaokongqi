@@ -7,6 +7,7 @@ data class SavedDevice(
     val host: String,
     val token: String,
     val pcName: String,
+    val port: Int = 10825,
     val savedAt: Long = System.currentTimeMillis(),
 )
 

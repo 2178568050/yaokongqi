@@ -3,16 +3,22 @@ use anyhow::{Context, Result};
 use log::warn;
 use std::thread;
 use std::time::Duration;
-use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HGLOBAL, HWND, LUID};
 use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Shutdown::{ExitWindowsEx, EWX_POWEROFF, EWX_SHUTDOWN, SHUTDOWN_REASON};
+use windows::Win32::Security::{
+    AdjustTokenPrivileges, LookupPrivilegeValueW, SE_PRIVILEGE_ENABLED, TOKEN_ADJUST_PRIVILEGES,
+    TOKEN_PRIVILEGES, TOKEN_QUERY,
+};
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
-    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS,
+    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_HWHEEL,
+    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
+    MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL,
+    MOUSEINPUT, MOUSE_EVENT_FLAGS, VIRTUAL_KEY,
 };
 
 const MOD_SHIFT: u8 = 1;
@@ -30,12 +36,23 @@ fn vk_from_mod(bit: u8) -> Option<u16> {
     }
 }
 
+/// 导航键、Win 键等需要 KEYEVENTF_EXTENDEDKEY，否则部分应用（如视频快进）收不到 →。
+fn vk_needs_extended(vk: u16) -> bool {
+    matches!(
+        vk,
+        0x21..=0x28 | 0x2D | 0x2E | 0x5B | 0x5C | 0x6F | 0xA3 | 0xA4 | 0xA5
+    )
+}
+
 fn send_vk(vk: u16, down: bool) {
-    let flags = if down {
+    let mut flags = if down {
         KEYBD_EVENT_FLAGS(0)
     } else {
         KEYEVENTF_KEYUP
     };
+    if vk_needs_extended(vk) {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
 
     let input = INPUT {
         r#type: INPUT_KEYBOARD,
@@ -68,7 +85,18 @@ fn apply_mods(mods: u8, down: bool) {
     }
 }
 
+/// 无修饰键按下前释放可能卡住的修饰键，避免 Win 卡住时 D 触发 Win+D 显示桌面。
+fn release_stuck_modifier_keys() {
+    for vk in [0x10u16, 0x11, 0x12, 0x5B, 0x5C] {
+        send_vk(vk, false);
+    }
+}
+
 pub(crate) fn inject_key(vk: u16, action: KeyAction, mods: u8) {
+    if mods == 0 && matches!(action, KeyAction::Tap | KeyAction::Double) {
+        release_stuck_modifier_keys();
+    }
+
     match action {
         KeyAction::Down => {
             apply_mods(mods, true);
@@ -251,15 +279,57 @@ fn inject_text_unicode_fallback(text: &str) {
     }
 }
 
-pub(crate) fn system_shutdown() {
+fn enable_shutdown_privilege() -> Result<()> {
     unsafe {
-        let _ = ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF, SHUTDOWN_REASON(0));
+        let mut token = HANDLE::default();
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        )
+        .context("OpenProcessToken")?;
+
+        let mut luid = LUID::default();
+        LookupPrivilegeValueW(None, windows::core::w!("SeShutdownPrivilege"), &mut luid)
+            .context("LookupPrivilegeValueW SeShutdownPrivilege")?;
+
+        let tp = TOKEN_PRIVILEGES {
+            PrivilegeCount: 1,
+            Privileges: [windows::Win32::Security::LUID_AND_ATTRIBUTES {
+                Luid: luid,
+                Attributes: SE_PRIVILEGE_ENABLED,
+            }],
+        };
+
+        AdjustTokenPrivileges(token, false, Some(&tp as *const _), 0, None, None)
+            .context("AdjustTokenPrivileges")?;
+        let _ = CloseHandle(token);
+    }
+    Ok(())
+}
+
+pub(crate) fn system_shutdown() {
+    if let Err(e) = enable_shutdown_privilege() {
+        warn!("获取关机权限失败: {e}");
+    }
+
+    unsafe {
+        match ExitWindowsEx(EWX_SHUTDOWN | EWX_POWEROFF, SHUTDOWN_REASON(0)) {
+            Ok(()) => log::info!("关机指令已发送"),
+            Err(e) => warn!("ExitWindowsEx 失败: {e}（可能需要以管理员运行 PC 端）"),
+        }
     }
 }
 
-/// 客户端断开或连接被替换时，释放可能卡住的修饰键/鼠标键。
+/// 客户端断开或连接被替换时，释放可能卡住的修饰键/鼠标键及常用按键。
 pub(crate) fn release_all_stuck_inputs() {
-    for vk in [0x10u16, 0x11, 0x12, 0x5B, 0x5C] {
+    const RELEASE_VKS: [u16; 21] = [
+        0x10, 0x11, 0x12, 0x5B, 0x5C, // Shift/Ctrl/Alt/Win
+        0x09, 0x0D, 0x1B, 0x20, // Tab/Enter/Esc/Space
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, // Page/Nav arrows
+        0x41, 0x44, 0x53, 0x57, // WASD
+    ];
+    for vk in RELEASE_VKS {
         send_vk(vk, false);
     }
     for button in [MouseButton::Left, MouseButton::Right, MouseButton::Middle] {

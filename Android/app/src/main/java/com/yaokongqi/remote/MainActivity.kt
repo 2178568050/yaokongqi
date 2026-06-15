@@ -51,4 +51,11 @@ class MainActivity : ComponentActivity() {
             mainViewModel.onAppForeground()
         }
     }
+
+    override fun onPause() {
+        if (::mainViewModel.isInitialized) {
+            mainViewModel.onAppBackground()
+        }
+        super.onPause()
+    }
 }

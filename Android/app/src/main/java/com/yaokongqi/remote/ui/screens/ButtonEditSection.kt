@@ -52,15 +52,16 @@ fun ButtonEditSection(
     layoutEditable: Boolean = true,
 ) {
     val layout by viewModel.buttonLayout.collectAsState()
+    val effectiveLayoutMode = layout.layoutMode
     var showAddDialog by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<RemoteButton?>(null) }
     var pendingGridRow by remember { mutableIntStateOf(-1) }
     var pendingGridCol by remember { mutableIntStateOf(-1) }
     var addStoreError by remember { mutableStateOf<String?>(null) }
-    val canEdit = layoutMode != LayoutMode.FULL_KEYBOARD
-    val maxButtons = layoutMode.maxButtons
-    val columns = layoutMode.columns
-    val rows = layoutMode.rows
+    val canEdit = effectiveLayoutMode != LayoutMode.FULL_KEYBOARD
+    val maxButtons = effectiveLayoutMode.maxButtons
+    val columns = effectiveLayoutMode.columns
+    val rows = effectiveLayoutMode.rows
     val activeButtons = remember(layout.buttons, maxButtons) {
         layout.buttons.take(maxButtons)
     }
@@ -83,15 +84,15 @@ fun ButtonEditSection(
         Spacer(modifier = Modifier.height(8.dp))
     }
 
-    val occupiedCells = if (layoutMode.isGrid) {
+    val occupiedCells = if (effectiveLayoutMode.isGrid) {
         GridLayoutHelper.occupiedCells(activeButtons, columns, rows)
     } else {
         activeButtons.size
     }
-    val maxCells = if (layoutMode.isGrid) GridLayoutHelper.maxCells(columns, rows) else maxButtons
+    val maxCells = if (effectiveLayoutMode.isGrid) GridLayoutHelper.maxCells(columns, rows) else maxButtons
 
     Text(
-        if (layoutMode.isGrid) {
+        if (effectiveLayoutMode.isGrid) {
             "最多 $maxButtons 个按键，占格 $occupiedCells / $maxCells"
         } else {
             "最多 $maxButtons 个，当前 ${activeButtons.size} 个"
@@ -101,7 +102,7 @@ fun ButtonEditSection(
     )
     Spacer(modifier = Modifier.height(8.dp))
 
-    if (layoutMode.isGrid) {
+    if (effectiveLayoutMode.isGrid) {
         LayoutGridPreview(
             buttons = activeButtons,
             columns = columns,
@@ -136,6 +137,7 @@ fun ButtonEditSection(
                             gridRow = row,
                             gridCol = col,
                         ),
+                        effectiveLayoutMode,
                     )
                 }
             } else {
@@ -162,7 +164,7 @@ fun ButtonEditSection(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                val spanHint = if (layoutMode.isGrid && (button.colSpan > 1 || button.rowSpan > 1)) {
+                val spanHint = if (effectiveLayoutMode.isGrid && (button.colSpan > 1 || button.rowSpan > 1)) {
                     " (${button.colSpan}×${button.rowSpan})"
                 } else {
                     ""
@@ -173,7 +175,7 @@ fun ButtonEditSection(
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 TextButton(onClick = { editing = button }) { Text("编辑") }
-                IconButton(onClick = { viewModel.removeButton(button.id) }) {
+                IconButton(onClick = { viewModel.removeButton(button.id, effectiveLayoutMode) }) {
                     Icon(Icons.Default.Delete, contentDescription = "删除")
                 }
             }
@@ -204,7 +206,7 @@ fun ButtonEditSection(
         ButtonEditDialog(
             title = "添加按钮",
             initial = null,
-            layoutMode = layoutMode,
+            layoutMode = effectiveLayoutMode,
             gridRow = pendingGridRow,
             gridCol = pendingGridCol,
             existingButtons = activeButtons,
@@ -215,13 +217,13 @@ fun ButtonEditSection(
                 addStoreError = null
             },
             onConfirm = {
-                if (viewModel.addButton(it, layoutMode)) {
+                if (viewModel.addButton(it, effectiveLayoutMode)) {
                     showAddDialog = false
                     pendingGridRow = -1
                     pendingGridCol = -1
                     addStoreError = null
                 } else {
-                    addStoreError = "添加失败，请检查占格位置或先保存布局模式"
+                    addStoreError = "添加失败：网格已满或当前位置无法放置，请换位置或缩小占格"
                 }
             },
             externalError = addStoreError,
@@ -232,13 +234,13 @@ fun ButtonEditSection(
             ButtonEditDialog(
                 title = "编辑按钮",
                 initial = button,
-                layoutMode = layoutMode,
+                layoutMode = effectiveLayoutMode,
                 gridRow = button.gridRow,
                 gridCol = button.gridCol,
                 existingButtons = activeButtons.filter { it.id != button.id },
                 onDismiss = { editing = null },
                 onConfirm = {
-                    viewModel.updateButton(it)
+                    viewModel.updateButton(it, effectiveLayoutMode)
                     editing = null
                 },
             )
