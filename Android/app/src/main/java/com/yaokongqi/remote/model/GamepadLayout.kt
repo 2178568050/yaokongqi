@@ -126,20 +126,55 @@ data class GamepadLayout(
     }
 
     /** 可拖动布局的按键（不含固定半屏区域）；自动补全默认包中缺失的键 */
-    fun buttonControls(): List<GamepadControlPlacement> {
-        val buttons = controls.filter { !it.isZone }
-        val base = buttons.ifEmpty { GamepadLayouts.defaultButtonControls() }
-        val existingIds = base.map { it.id }.toSet()
-        val missing = GamepadLayouts.defaultButtonControls().filter { it.id !in existingIds }
-        return base + missing
-    }
+    fun buttonControls(): List<GamepadControlPlacement> = normalized().controls.filter { !it.isZone }
 
     fun moveStickPlacement(): GamepadControlPlacement =
-        controls.find { it.id == GamepadControlId.MOVE_STICK } ?: GamepadLayouts.defaultMoveStick()
+        normalized().controls.find { it.id == GamepadControlId.MOVE_STICK }
+            ?: GamepadLayouts.defaultMoveStick()
 
-    /** 持久化保存：战斗按键 + 移动轮盘 */
-    fun layoutControls(): List<GamepadControlPlacement> = buttonControls() + moveStickPlacement()
+    /** 持久化保存：去重后的战斗按键 + 移动轮盘 */
+    fun layoutControls(): List<GamepadControlPlacement> =
+        buttonControls() + moveStickPlacement()
+
+    /** 合并 legacy Xbox 键位（RT/LT/A…）与语义键（开火/开镜…），避免重复显示 */
+    fun normalized(): GamepadLayout {
+        val zones = controls.filter { it.isZone }.distinctBy { it.id }
+        val merged = LinkedHashMap<GamepadControlId, GamepadControlPlacement>()
+        for (placement in controls.filter { !it.isZone }) {
+            val canonicalId = placement.id.canonicalId()
+            val candidate = if (placement.id == canonicalId) {
+                placement
+            } else {
+                placement.copy(id = canonicalId)
+            }
+            val existing = merged[canonicalId]
+            if (existing == null || existing.id.isLegacyXboxButton() && !candidate.id.isLegacyXboxButton()) {
+                merged[canonicalId] = candidate
+            }
+        }
+        val buttons = merged.values.toList()
+        val existingIds = buttons.map { it.id }.toSet()
+        val missing = GamepadLayouts.defaultButtonControls().filter { it.id !in existingIds }
+        return copy(controls = zones + buttons + missing)
+    }
 }
+
+private val LEGACY_TO_CANONICAL = mapOf(
+    GamepadControlId.RT to GamepadControlId.FIRE,
+    GamepadControlId.LT to GamepadControlId.ADS,
+    GamepadControlId.A to GamepadControlId.JUMP,
+    GamepadControlId.B to GamepadControlId.SLIDE,
+    GamepadControlId.X to GamepadControlId.INTERACT,
+    GamepadControlId.LB to GamepadControlId.TACTICAL,
+    GamepadControlId.RB to GamepadControlId.ULTIMATE,
+    GamepadControlId.Y to GamepadControlId.WEAPON,
+)
+
+private fun GamepadControlId.canonicalId(): GamepadControlId =
+    LEGACY_TO_CANONICAL[this] ?: this
+
+private fun GamepadControlId.isLegacyXboxButton(): Boolean =
+    this in LEGACY_TO_CANONICAL
 
 object GamepadLayouts {
     fun default(): GamepadLayout = GamepadLayout(

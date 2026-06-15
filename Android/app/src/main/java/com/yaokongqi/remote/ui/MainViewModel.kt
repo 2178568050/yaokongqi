@@ -404,10 +404,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 编辑布局时暂停手柄输入上报，减轻连接负载 */
+    fun pauseGamepadUpdates() {
+        gamepadLoopJob?.cancel()
+        gamepadLoopJob = null
+        gamepadEngine.reset()
+        manager.updateGamepadSnapshot(GamepadSnapshot())
+    }
+
     fun clearGamepadError() = manager.clearGamepadError()
 
     fun saveGamepadLayout(layout: GamepadLayout) {
-        val updated = settingsStore.load().copy(gamepadLayout = layout)
+        val normalized = layout.normalized()
+        val updated = settingsStore.load().copy(gamepadLayout = normalized)
         settingsStore.save(updated)
         settingsStore.updateDraft(updated)
         settingsDraft = updated

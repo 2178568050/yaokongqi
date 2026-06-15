@@ -109,7 +109,9 @@ fun GamepadScreen(
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     var editMode by rememberSaveable { mutableStateOf(false) }
-    var layout by remember(settings.gamepadLayout) { mutableStateOf(settings.gamepadLayout) }
+    var layout by remember(settings.gamepadLayout) {
+        mutableStateOf(settings.gamepadLayout.normalized())
+    }
     var selectedId by remember { mutableStateOf<GamepadControlId?>(null) }
 
     LaunchedEffect(layoutEditRequest) {
@@ -128,7 +130,7 @@ fun GamepadScreen(
 
     LaunchedEffect(settings.gamepadLayout) {
         if (!editMode) {
-            layout = settings.gamepadLayout
+            layout = settings.gamepadLayout.normalized()
         }
     }
 
@@ -144,6 +146,8 @@ fun GamepadScreen(
     }
 
     LaunchedEffect(
+        isConnected,
+        editMode,
         settings.gamepadPollHz,
         settings.aimDecay,
         settings.moveSensitivity,
@@ -153,6 +157,10 @@ fun GamepadScreen(
         settings.moveDeadzone,
     ) {
         viewModel.gamepadEngine.setAimPollHz(settings.gamepadPollHz)
+        if (!isConnected || editMode) {
+            viewModel.pauseGamepadUpdates()
+            return@LaunchedEffect
+        }
         viewModel.runGamepadLoop(
             pollHz = settings.gamepadPollHz,
             aimDecay = settings.aimDecay,
@@ -293,9 +301,7 @@ fun GamepadScreen(
                 selectedId = null
             },
             onFinishEdit = {
-                viewModel.saveGamepadLayout(
-                    layout.copy(controls = layout.layoutControls()),
-                )
+                viewModel.saveGamepadLayout(layout.normalized())
                 editMode = false
                 selectedId = null
             },
@@ -470,7 +476,6 @@ private fun BoxScope.PlacedGamepadControl(
         .coerceIn(0f, (containerHeight - hitDiameterDp).value.coerceAtLeast(0f).toFloat())
 
     val density = LocalDensity.current
-    val viewConfiguration = LocalViewConfiguration.current
     val containerWidthPx = with(density) { containerWidth.toPx() }
     val containerHeightPx = with(density) { containerHeight.toPx() }
 
@@ -481,24 +486,18 @@ private fun BoxScope.PlacedGamepadControl(
             .clip(CircleShape)
             .then(
                 if (editMode) {
-                    Modifier.pointerInput(placement.id, placement.centerX, placement.centerY) {
-                        awaitEachGesture {
-                            val down = awaitFirstDown(requireUnconsumed = false)
-                            onSelect()
-                            var accumulated = Offset.Zero
-                            val pointerId = down.id
-                            drag(pointerId) { change ->
-                                val delta = change.positionChange()
+                    // 仅用 id 作为 key，避免拖动时 center 变化导致手势被中断
+                    Modifier.pointerInput(placement.id) {
+                        detectDragGestures(
+                            onDragStart = { onSelect() },
+                            onDrag = { change, dragAmount ->
                                 change.consume()
-                                accumulated += delta
-                                if (accumulated.getDistance() >= viewConfiguration.touchSlop) {
-                                    onMove(
-                                        delta.x / containerWidthPx,
-                                        delta.y / containerHeightPx,
-                                    )
-                                }
-                            }
-                        }
+                                onMove(
+                                    dragAmount.x / containerWidthPx,
+                                    dragAmount.y / containerHeightPx,
+                                )
+                            },
+                        )
                     }
                 } else {
                     Modifier

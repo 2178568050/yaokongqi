@@ -77,5 +77,6 @@ data class AppSettings(
         aimDecay = aimDecay.coerceIn(AIM_DECAY_MIN, AIM_DECAY_MAX),
         gamepadControlAlpha = gamepadControlAlpha.coerceIn(GAMEPAD_ALPHA_MIN, GAMEPAD_ALPHA_MAX),
         gamepadPollHz = gamepadPollHz.coerceIn(60, 250),
+        gamepadLayout = gamepadLayout.normalized(),
     )
 }

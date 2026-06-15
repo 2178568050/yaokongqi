@@ -111,6 +111,10 @@ class ConnectionManager(
     @Volatile
     private var remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
 
+    /** 用户期望的模式；断线重连后恢复，避免反复切换 input_mode 导致 PC 踢线 */
+    @Volatile
+    private var desiredRemoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
+
     @Volatile
     private var gamepadPollHz = 180
 
@@ -151,6 +155,7 @@ class ConnectionManager(
 
     fun setRemoteInputMode(mode: RemoteInputMode, pollHz: Int = gamepadPollHz) {
         gamepadPollHz = pollHz.coerceIn(60, 250)
+        desiredRemoteInputMode = mode
         if (remoteInputMode == mode && mode != RemoteInputMode.GAMEPAD) return
         remoteInputMode = mode
         _gamepadError.value = null
@@ -219,7 +224,7 @@ class ConnectionManager(
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (gen != connectionGeneration) return
-                webSocket.send(pairPayload)
+                safeSend(webSocket, pairPayload)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -359,6 +364,7 @@ class ConnectionManager(
     }
 
     private fun beginNewConnection(): Int {
+        cancelScheduledReconnect()
         connectionGeneration++
         val gen = connectionGeneration
         webSocket?.close(1000, "reconnecting")
@@ -419,7 +425,10 @@ class ConnectionManager(
             latencyMs = lastLatencyMs,
             packetLossPercent = computePacketLoss(),
         )
-        startMoveFlusher()
+        when (desiredRemoteInputMode) {
+            RemoteInputMode.GAMEPAD -> setRemoteInputMode(RemoteInputMode.GAMEPAD, gamepadPollHz)
+            RemoteInputMode.KEYBOARD_MOUSE -> startMoveFlusher()
+        }
         startConnectionService(pcName ?: connectedPcName)
     }
 
@@ -440,7 +449,26 @@ class ConnectionManager(
             pendingPings[seq] = now
             trimPendingPingsLocked()
         }
-        ws.send(encodePing(seq, now))
+        if (!safeSend(ws, encodePing(seq, now))) {
+            recordOutcome(false)
+        }
+    }
+
+    /** 串行化 WebSocket 发送，避免并发 write 触发 Broken pipe */
+    private fun safeSend(ws: WebSocket, payload: String): Boolean {
+        if (ws != webSocket) return false
+        return synchronized(this) {
+            try {
+                ws.send(payload)
+            } catch (_: Exception) {
+                false
+            }
+        }
+    }
+
+    private fun safeSend(payload: String): Boolean {
+        val ws = webSocket ?: return false
+        return safeSend(ws, payload)
     }
 
     private fun onPongReceived(seq: Int) {
@@ -493,13 +521,13 @@ class ConnectionManager(
     fun sendKey(vk: Int, mods: Int) {
         if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
-        webSocket?.send(encodeKey(token, vk, mods))
+        safeSend(encodeKey(token, vk, mods))
     }
 
     fun sendCombo(vk: Int, mods: Int) {
         if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
-        webSocket?.send(encodeCombo(token, vk, mods))
+        safeSend(encodeCombo(token, vk, mods))
     }
 
     fun sendMouseMove(dx: Float, dy: Float) {
@@ -518,7 +546,7 @@ class ConnectionManager(
     fun sendMouseClick(button: String, action: String = "tap") {
         if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
-        webSocket?.send(encodeMouseClick(token, button, action))
+        safeSend(encodeMouseClick(token, button, action))
     }
 
     fun sendMouseLeftClick() = sendMouseClick("left", "tap")
@@ -531,20 +559,20 @@ class ConnectionManager(
         if (!canSendKeyboardMouse()) return
         if (deltaY == 0 && deltaX == 0) return
         val token = sessionToken ?: return
-        webSocket?.send(encodeMouseScroll(token, deltaY, deltaX))
+        safeSend(encodeMouseScroll(token, deltaY, deltaX))
     }
 
     fun sendText(text: String) {
         if (!canSendPcInput()) return
         if (text.isEmpty()) return
         val token = sessionToken ?: return
-        webSocket?.send(encodeTextInput(token, text))
+        safeSend(encodeTextInput(token, text))
     }
 
     fun sendSystemShutdown() {
         if (!canSendPcInput()) return
         val token = sessionToken ?: return
-        webSocket?.send(encodeSystem(token, "shutdown"))
+        safeSend(encodeSystem(token, "shutdown"))
     }
 
     fun sendVolumeUp() = sendKey(0xAF, 0)
@@ -553,6 +581,7 @@ class ConnectionManager(
 
     fun disconnect() {
         userInitiatedDisconnect = true
+        desiredRemoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
         cancelScheduledReconnect()
         beginNewConnection()
         _info.value = ConnectionInfo(state = ConnectionState.Disconnected)
@@ -584,9 +613,11 @@ class ConnectionManager(
         stopQualityProbe()
         qualityJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
-                delay(3_000)
+                val intervalMs = if (desiredRemoteInputMode == RemoteInputMode.GAMEPAD) 5_000L else 3_000L
+                delay(intervalMs)
                 val socket = webSocket ?: break
                 if (socket != ws || gen != connectionGeneration) break
+                if (_info.value.state != ConnectionState.Connected) break
                 sendMeasuredPing(socket)
                 delay(500)
                 val expired = synchronized(this@ConnectionManager) {
@@ -635,7 +666,7 @@ class ConnectionManager(
     private fun flushPendingMove() {
         if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
-        val ws = webSocket ?: return
+        if (webSocket == null) return
         val (dx, dy) = synchronized(this) {
             val ix = moveAccumX.roundToInt()
             val iy = moveAccumY.roundToInt()
@@ -644,18 +675,18 @@ class ConnectionManager(
             ix to iy
         }
         if (dx != 0 || dy != 0) {
-            ws.send(encodeMouseMove(token, dx, dy))
+            safeSend(encodeMouseMove(token, dx, dy))
         }
     }
 
     private fun sendInputModeMessage(mode: String) {
         val token = sessionToken ?: return
-        webSocket?.send(encodeInputMode(token, mode, gamepadPollHz))
+        safeSend(encodeInputMode(token, mode, gamepadPollHz))
     }
 
     private fun sendZeroGamepad() {
         val token = sessionToken ?: return
-        webSocket?.send(encodeGamepad(token, 0, 0, 0, 0, 0, 0, 0))
+        safeSend(encodeGamepad(token, 0, 0, 0, 0, 0, 0, 0))
     }
 
     private fun startGamepadSender() {
@@ -669,7 +700,8 @@ class ConnectionManager(
                 val snap = gamepadSnapshot
                 // 空闲时不重复发送全零帧，减轻 WiFi 与 PC 负载
                 if (snap != lastSentGamepadSnapshot) {
-                    val sent = ws.send(
+                    val sent = safeSend(
+                        ws,
                         encodeGamepad(
                             token,
                             snap.lx,
@@ -702,6 +734,7 @@ class ConnectionManager(
     private fun scheduleReconnectAfterDrop() {
         if (userInitiatedDisconnect || !hasSavedSession()) return
         if (reconnectAttempt >= MAX_AUTO_RECONNECT) return
+        if (reconnectJob?.isActive == true) return
         reconnectJob?.cancel()
         val attempt = reconnectAttempt
         reconnectJob = scope.launch(Dispatchers.IO) {
@@ -741,6 +774,6 @@ class ConnectionManager(
         const val MOVE_FLUSH_MS = 2L
         const val MOVE_FLUSH_THRESHOLD_PX = 0.45f
         const val MAX_AUTO_RECONNECT = 6
-        const val RECONNECT_DEBOUNCE_MS = 3_000L
+        const val RECONNECT_DEBOUNCE_MS = 5_000L
     }
 }
