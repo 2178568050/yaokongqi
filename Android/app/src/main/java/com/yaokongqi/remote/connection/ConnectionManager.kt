@@ -91,6 +91,12 @@ class ConnectionManager(
     private var reconnectAttempt = 0
 
     @Volatile
+    private var lastReconnectRequestMs = 0L
+
+    @Volatile
+    private var lastSentGamepadSnapshot = GamepadSnapshot()
+
+    @Volatile
     private var moveAccumX = 0f
 
     @Volatile
@@ -177,6 +183,17 @@ class ConnectionManager(
 
     fun shouldAutoReconnect(): Boolean = !userInitiatedDisconnect && hasSavedSession()
 
+    /** 避免 onResume 与定时重连同时发起连接，导致互相踢线并出现 Broken pipe */
+    fun requestAutoReconnect() {
+        if (userInitiatedDisconnect || !hasSavedSession()) return
+        val state = _info.value.state
+        if (state == ConnectionState.Connected || state == ConnectionState.Connecting) return
+        val now = System.currentTimeMillis()
+        if (now - lastReconnectRequestMs < RECONNECT_DEBOUNCE_MS) return
+        lastReconnectRequestMs = now
+        reconnectSavedInternal(resetAttempt = false)
+    }
+
     fun pair(host: String, pin: String) {
         userInitiatedDisconnect = false
         cancelScheduledReconnect()
@@ -241,8 +258,15 @@ class ConnectionManager(
 
     fun reconnectSaved() {
         userInitiatedDisconnect = false
-        reconnectAttempt = 0
         cancelScheduledReconnect()
+        lastReconnectRequestMs = System.currentTimeMillis()
+        reconnectSavedInternal(resetAttempt = true)
+    }
+
+    private fun reconnectSavedInternal(resetAttempt: Boolean) {
+        if (resetAttempt) {
+            reconnectAttempt = 0
+        }
         val device = deviceStore.lastDevice() ?: return
         if (device.token.isEmpty()) return
         reconnectTo(device.host)
@@ -256,6 +280,7 @@ class ConnectionManager(
     }
 
     private fun connectWithToken(host: String, port: Int, token: String, pcName: String?) {
+        if (_info.value.state == ConnectionState.Connecting) return
         val gen = beginNewConnection()
         _info.value = ConnectionInfo(state = ConnectionState.Connecting)
         sessionToken = token
@@ -348,6 +373,7 @@ class ConnectionManager(
         stopGamepadSender()
         remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
         gamepadSnapshot = GamepadSnapshot()
+        lastSentGamepadSnapshot = GamepadSnapshot()
         _gamepadError.value = null
         stopConnectionService()
         sessionToken = null
@@ -641,18 +667,23 @@ class ConnectionManager(
                 val token = sessionToken ?: break
                 val ws = webSocket ?: break
                 val snap = gamepadSnapshot
-                ws.send(
-                    encodeGamepad(
-                        token,
-                        snap.lx,
-                        snap.ly,
-                        snap.rx,
-                        snap.ry,
-                        snap.lt,
-                        snap.rt,
-                        snap.buttons,
-                    ),
-                )
+                // 空闲时不重复发送全零帧，减轻 WiFi 与 PC 负载
+                if (snap != lastSentGamepadSnapshot) {
+                    val sent = ws.send(
+                        encodeGamepad(
+                            token,
+                            snap.lx,
+                            snap.ly,
+                            snap.rx,
+                            snap.ry,
+                            snap.lt,
+                            snap.rt,
+                            snap.buttons,
+                        ),
+                    )
+                    if (!sent) break
+                    lastSentGamepadSnapshot = snap
+                }
                 delay(intervalMs)
             }
         }
@@ -679,7 +710,8 @@ class ConnectionManager(
             val state = _info.value.state
             if (state == ConnectionState.Connected || state == ConnectionState.Connecting) return@launch
             reconnectAttempt = attempt + 1
-            reconnectSaved()
+            lastReconnectRequestMs = System.currentTimeMillis()
+            reconnectSavedInternal(resetAttempt = false)
         }
     }
 
@@ -709,5 +741,6 @@ class ConnectionManager(
         const val MOVE_FLUSH_MS = 2L
         const val MOVE_FLUSH_THRESHOLD_PX = 0.45f
         const val MAX_AUTO_RECONNECT = 6
+        const val RECONNECT_DEBOUNCE_MS = 3_000L
     }
 }

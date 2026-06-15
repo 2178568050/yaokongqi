@@ -354,7 +354,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             ConnectionState.Connecting -> Unit
             ConnectionState.Disconnected, ConnectionState.Error -> {
                 if (manager.shouldAutoReconnect()) {
-                    reconnect()
+                    manager.requestAutoReconnect()
                 }
             }
         }
