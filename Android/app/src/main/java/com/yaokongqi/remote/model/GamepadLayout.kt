@@ -1,5 +1,6 @@
 package com.yaokongqi.remote.model
 
+import kotlin.math.roundToInt
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -130,7 +131,9 @@ data class GamepadLayout(
 
     fun moveStickPlacement(): GamepadControlPlacement =
         normalized().controls.find { it.id == GamepadControlId.MOVE_STICK }
-            ?: GamepadLayouts.defaultMoveStick()
+            ?: GamepadLayouts.defaultMoveStick().let {
+                it.copy(sizeDp = GamepadSizeLimits.clampButtonSize(it.id, it.sizeDp))
+            }
 
     /** 持久化保存：去重后的战斗按键 + 移动轮盘 */
     fun layoutControls(): List<GamepadControlPlacement> =
@@ -149,7 +152,9 @@ data class GamepadLayout(
             }
             val existing = merged[canonicalId]
             if (existing == null || existing.id.isLegacyXboxButton() && !candidate.id.isLegacyXboxButton()) {
-                merged[canonicalId] = candidate
+                merged[canonicalId] = candidate.copy(
+                    sizeDp = GamepadSizeLimits.clampButtonSize(canonicalId, candidate.sizeDp),
+                )
             }
         }
         val buttons = merged.values.toList()
@@ -176,6 +181,24 @@ private fun GamepadControlId.canonicalId(): GamepadControlId =
 private fun GamepadControlId.isLegacyXboxButton(): Boolean =
     this in LEGACY_TO_CANONICAL
 
+object GamepadSizeLimits {
+    /** 100% 参照直径，用于编辑界面百分比显示 */
+    const val BUTTON_BASE_DP = 56f
+    const val BUTTON_MIN_DP = 36f
+    const val BUTTON_MAX_DP = BUTTON_BASE_DP * 2.5f // 250%
+
+    const val MOVE_STICK_MIN_DP = 72f
+    const val MOVE_STICK_MAX_DP = 108f * 2.5f // 270dp
+
+    fun buttonSizePercent(sizeDp: Float): Int =
+        (sizeDp / BUTTON_BASE_DP * 100f).roundToInt().coerceIn(64, 250)
+
+    fun clampButtonSize(id: GamepadControlId, sizeDp: Float): Float = when (id) {
+        GamepadControlId.MOVE_STICK -> sizeDp.coerceIn(MOVE_STICK_MIN_DP, MOVE_STICK_MAX_DP)
+        else -> sizeDp.coerceIn(BUTTON_MIN_DP, BUTTON_MAX_DP)
+    }
+}
+
 object GamepadLayouts {
     fun default(): GamepadLayout = GamepadLayout(
         defaultButtonControls() + defaultMoveStick(),
@@ -188,20 +211,21 @@ object GamepadLayouts {
     fun defaultButtonControls(): List<GamepadControlPlacement> = listOf(
         // 主战斗（右下弧）
         GamepadControlPlacement(id = GamepadControlId.FIRE, centerX = 0.87f, centerY = 0.82f, sizeDp = 70f),
-        GamepadControlPlacement(id = GamepadControlId.ADS, centerX = 0.74f, centerY = 0.72f, sizeDp = 62f),
         GamepadControlPlacement(id = GamepadControlId.JUMP, centerX = 0.93f, centerY = 0.66f, sizeDp = 54f),
         GamepadControlPlacement(id = GamepadControlId.SLIDE, centerX = 0.78f, centerY = 0.90f, sizeDp = 50f),
         // 中右功能区
         GamepadControlPlacement(id = GamepadControlId.RELOAD, centerX = 0.66f, centerY = 0.74f, sizeDp = 46f),
         GamepadControlPlacement(id = GamepadControlId.INTERACT, centerX = 0.58f, centerY = 0.84f, sizeDp = 48f),
-        GamepadControlPlacement(id = GamepadControlId.TACTICAL, centerX = 0.58f, centerY = 0.66f, sizeDp = 48f),
         GamepadControlPlacement(id = GamepadControlId.ULTIMATE, centerX = 0.66f, centerY = 0.62f, sizeDp = 48f),
         GamepadControlPlacement(id = GamepadControlId.THROW, centerX = 0.72f, centerY = 0.58f, sizeDp = 46f),
-        // D-pad / 切枪（右半屏上部，不贴顶角）
+        // D-pad / 切枪（右半屏上部）
         GamepadControlPlacement(id = GamepadControlId.HEAL, centerX = 0.54f, centerY = 0.40f, sizeDp = 44f),
         GamepadControlPlacement(id = GamepadControlId.SURVIVAL, centerX = 0.54f, centerY = 0.52f, sizeDp = 44f),
         GamepadControlPlacement(id = GamepadControlId.WEAPON, centerX = 0.64f, centerY = 0.46f, sizeDp = 46f),
-        // 系统键（右半屏顶部内侧，避开右上角编辑栏预留区）
+        // 右上角：开镜 + 战术技能（拇指易触达）
+        GamepadControlPlacement(id = GamepadControlId.ADS, centerX = 0.88f, centerY = 0.14f, sizeDp = 62f),
+        GamepadControlPlacement(id = GamepadControlId.TACTICAL, centerX = 0.78f, centerY = 0.14f, sizeDp = 48f),
+        // 系统键（顶部内侧，避开编辑栏）
         GamepadControlPlacement(id = GamepadControlId.MAP, centerX = 0.58f, centerY = 0.14f, sizeDp = 42f),
         GamepadControlPlacement(id = GamepadControlId.BACKPACK, centerX = 0.68f, centerY = 0.14f, sizeDp = 42f),
     )

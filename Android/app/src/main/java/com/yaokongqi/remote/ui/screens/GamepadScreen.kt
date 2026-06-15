@@ -81,6 +81,7 @@ import com.yaokongqi.remote.model.GamepadControlId
 import com.yaokongqi.remote.model.GamepadControlPlacement
 import com.yaokongqi.remote.model.GamepadLayout
 import com.yaokongqi.remote.model.GamepadLayouts
+import com.yaokongqi.remote.model.GamepadSizeLimits
 import com.yaokongqi.remote.ui.MainViewModel
 import com.yaokongqi.remote.ui.game.GamepadActionBindings
 import com.yaokongqi.remote.ui.game.GamepadActionIcons
@@ -554,11 +555,22 @@ private fun LayoutButtonEditor(
             )
             LayoutSliderRow(
                 label = if (placement.id == GamepadControlId.MOVE_STICK) "轮盘" else "大小",
-                valueText = "${placement.sizeDp.roundToInt()}",
+                valueText = "${GamepadSizeLimits.buttonSizePercent(placement.sizeDp)}%",
                 value = placement.sizeDp,
-                valueRange = if (placement.id == GamepadControlId.MOVE_STICK) 72f..140f else 36f..96f,
-                onValueChange = { onUpdate(placement.copy(sizeDp = it)) },
+                valueRange = if (placement.id == GamepadControlId.MOVE_STICK) {
+                    GamepadSizeLimits.MOVE_STICK_MIN_DP..GamepadSizeLimits.MOVE_STICK_MAX_DP
+                } else {
+                    GamepadSizeLimits.BUTTON_MIN_DP..GamepadSizeLimits.BUTTON_MAX_DP
+                },
+                onValueChange = {
+                    onUpdate(
+                        placement.copy(
+                            sizeDp = GamepadSizeLimits.clampButtonSize(placement.id, it),
+                        ),
+                    )
+                },
                 textColor = subTextColor,
+                valueTextWidth = 40.dp,
             )
             LayoutSliderRow(
                 label = "透明",
@@ -580,6 +592,7 @@ private fun LayoutSliderRow(
     valueRange: ClosedFloatingPointRange<Float>,
     onValueChange: (Float) -> Unit,
     textColor: Color,
+    valueTextWidth: Dp = 36.dp,
 ) {
     Row(
         modifier = Modifier
@@ -605,7 +618,7 @@ private fun LayoutSliderRow(
             valueText,
             style = MaterialTheme.typography.labelSmall,
             color = textColor,
-            modifier = Modifier.width(36.dp),
+            modifier = Modifier.width(valueTextWidth),
             textAlign = TextAlign.End,
         )
     }
