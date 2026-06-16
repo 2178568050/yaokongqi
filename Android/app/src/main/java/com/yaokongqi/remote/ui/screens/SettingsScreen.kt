@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import android.content.Context
 import com.yaokongqi.remote.model.AppSettings
 import com.yaokongqi.remote.model.LayoutMode
 import com.yaokongqi.remote.model.TouchSensitivity
@@ -103,6 +104,14 @@ fun SettingsScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
+            GamepadSettingsSection(
+                current = current,
+                onDraftChange = { draft = it },
+                viewModel = viewModel,
+                context = context,
+                onSaved = onSaved,
+            )
+
             SettingsSection(title = "外观") {
                 RowSwitch(
                     title = "深色模式",
@@ -218,170 +227,6 @@ fun SettingsScreen(
                 }
             }
 
-            SettingsSection(title = "射击游戏（虚拟手柄）") {
-                RowSwitch(
-                    title = "射击游戏模式",
-                    subtitle = "横屏虚拟 Xbox 手柄；PC 需安装 ViGEmBus 驱动，游戏内请拔掉实体手柄",
-                    checked = current.shooterGamepadMode,
-                    onCheckedChange = { draft = current.copy(shooterGamepadMode = it) },
-                )
-                if (current.shooterGamepadMode) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-                    Text(
-                        "输入刷新率：${current.gamepadPollHz} Hz（竞技建议 180~250）",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf(125, 180, 250).forEach { hz ->
-                            FilterChip(
-                                selected = current.gamepadPollHz == hz,
-                                onClick = { draft = current.copy(gamepadPollHz = hz) },
-                                label = { Text("${hz}Hz") },
-                            )
-                        }
-                    }
-                    GamepadSliderSetting(
-                        label = "移动灵敏度",
-                        value = current.moveSensitivity,
-                        range = AppSettings.MOVE_SENS_MIN..AppSettings.MOVE_SENS_MAX,
-                        hint = "左半屏移动轮盘",
-                        onChange = { draft = current.copy(moveSensitivity = it) },
-                    )
-                    Text(
-                        "腰射瞄准（右半屏，水平 / 垂直可分别调节）",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                    GamepadSliderSetting(
-                        label = "腰射水平灵敏度",
-                        value = current.aimSensitivityX,
-                        range = AppSettings.AIM_SENS_X_MIN..AppSettings.AIM_SENS_X_MAX,
-                        hint = "左右滑动转身；小屏建议 3~6",
-                        onChange = {
-                            draft = current.copy(
-                                aimSensitivityX = it,
-                                aimSensitivity = it,
-                            )
-                        },
-                    )
-                    GamepadSliderSetting(
-                        label = "腰射垂直灵敏度",
-                        value = current.aimSensitivityY,
-                        range = AppSettings.AIM_SENS_Y_MIN..AppSettings.AIM_SENS_Y_MAX,
-                        hint = "上下滑动压枪 / 看天看地",
-                        onChange = { draft = current.copy(aimSensitivityY = it) },
-                    )
-                    Text(
-                        "开镜灵敏度（按住开镜键时生效）",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                    GamepadSliderSetting(
-                        label = "开镜水平灵敏度",
-                        value = current.adsAimSensitivityX,
-                        range = AppSettings.AIM_SENS_X_MIN..AppSettings.AIM_SENS_X_MAX,
-                        hint = "开镜时左右瞄准；通常低于腰射",
-                        onChange = { draft = current.copy(adsAimSensitivityX = it) },
-                    )
-                    GamepadSliderSetting(
-                        label = "开镜垂直灵敏度",
-                        value = current.adsAimSensitivityY,
-                        range = AppSettings.AIM_SENS_Y_MIN..AppSettings.AIM_SENS_Y_MAX,
-                        hint = "开镜时上下压枪",
-                        onChange = { draft = current.copy(adsAimSensitivityY = it) },
-                    )
-                    GamepadSliderSetting(
-                        label = "滑动加速度",
-                        value = current.aimSwipeAcceleration,
-                        range = AppSettings.AIM_SWIPE_ACCEL_MIN..AppSettings.AIM_SWIPE_ACCEL_MAX,
-                        hint = "快速滑动额外加速，便于转身；0 为匀速，建议 1.5~3",
-                        onChange = { draft = current.copy(aimSwipeAcceleration = it) },
-                    )
-                    GamepadSliderSetting(
-                        label = "瞄准平滑过滤",
-                        value = current.aimSmoothing,
-                        range = AppSettings.AIM_SMOOTHING_MIN..AppSettings.AIM_SMOOTHING_MAX,
-                        hint = "越大越稳、越小越跟手；快速甩枪时自动减弱",
-                        onChange = { draft = current.copy(aimSmoothing = it) },
-                    )
-                    GamepadSliderSetting(
-                        label = "移动死区",
-                        value = current.moveDeadzone,
-                        range = AppSettings.MOVE_DEADZONE_MIN..AppSettings.MOVE_DEADZONE_MAX,
-                        hint = "左轮盘中心无响应区域，越大越不易误触",
-                        onChange = { draft = current.copy(moveDeadzone = it) },
-                    )
-                    GamepadSliderSetting(
-                        label = "瞄准松手衰减",
-                        value = current.aimDecay,
-                        range = AppSettings.AIM_DECAY_MIN..AppSettings.AIM_DECAY_MAX,
-                        hint = "松手后准星惯性衰减，越大滑停越慢；越小停得越快",
-                        onChange = { draft = current.copy(aimDecay = it) },
-                    )
-                    GamepadSliderSetting(
-                        label = "控件透明度（全局）",
-                        value = current.gamepadControlAlpha,
-                        range = AppSettings.GAMEPAD_ALPHA_MIN..AppSettings.GAMEPAD_ALPHA_MAX,
-                        onChange = { draft = current.copy(gamepadControlAlpha = it) },
-                    )
-                    Text(
-                        "游戏中仅按键与移动轮盘可见；瞄准区游戏中透明，编辑布局时显示参考框",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
-                    RowSwitch(
-                        title = "非固定移动轮盘",
-                        subtitle = "关闭时左下固定小轮盘（推荐）；开启则在触点出现轮盘",
-                        checked = current.gamepadFloatingStick,
-                        onCheckedChange = { draft = current.copy(gamepadFloatingStick = it) },
-                    )
-                    Text(
-                        "左半屏移动、右半屏瞄准；编辑布局中可为每个键单独调大小与透明度",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp),
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            viewModel.saveSettings(current)
-                            context.findActivity()?.setGamepadLandscapeLock(true)
-                            viewModel.requestGamepadLayoutEdit()
-                            onSaved()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                    ) {
-                        Text("编辑按键布局")
-                    }
-                    OutlinedButton(
-                        onClick = {
-                            draft = viewModel.resetGamepadLayout(current)
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp),
-                    ) {
-                        Text("恢复 Apex 默认布局")
-                    }
-                    Button(
-                        onClick = {
-                            val updated = current.copy(shooterGamepadMode = false)
-                            viewModel.saveSettings(updated)
-                            draft = updated
-                            onSaved()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Primary),
-                    ) {
-                        Text("退出游戏模式")
-                    }
-                }
-            }
-
             SettingsSection(title = "设备") {
                 Text("已保存：${viewModel.savedPcName ?: viewModel.savedHost ?: "无"}")
                 Text(
@@ -404,6 +249,253 @@ fun SettingsScreen(
             }
 
             Spacer(modifier = Modifier.height(72.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun GamepadSettingsSection(
+    current: AppSettings,
+    onDraftChange: (AppSettings) -> Unit,
+    viewModel: MainViewModel,
+    context: Context,
+    onSaved: () -> Unit,
+) {
+    SettingsSection(title = "射击游戏（虚拟手柄）") {
+        RowSwitch(
+            title = "射击游戏模式",
+            subtitle = "横屏虚拟 Xbox 手柄；PC 需安装 ViGEmBus 驱动，游戏内请拔掉实体手柄",
+            checked = current.shooterGamepadMode,
+            onCheckedChange = { onDraftChange(current.copy(shooterGamepadMode = it)) },
+        )
+        if (current.shooterGamepadMode) {
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+            Text(
+                "发送频率 ${current.gamepadPollHz} Hz（兜底同步）· 瞄准/按键已即时发送" +
+                    if (current.gamepadUseUdp) " · UDP 已开" else " · 仅 WebSocket",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "Wi-Fi 稳定推荐 250 或 500 Hz；卡顿时可降到 120",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, bottom = 4.dp),
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(120, 180, 250, 500).forEach { hz ->
+                    FilterChip(
+                        selected = current.gamepadPollHz == hz,
+                        onClick = { onDraftChange(current.copy(gamepadPollHz = hz)) },
+                        label = {
+                            Text(
+                                when (hz) {
+                                    250 -> "${hz}Hz（默认）"
+                                    500 -> "${hz}Hz（低延迟）"
+                                    else -> "${hz}Hz"
+                                },
+                            )
+                        },
+                    )
+                }
+            }
+            RowSwitch(
+                title = "UDP 低延迟通道",
+                subtitle = "配对后走 udp://PC:10826；需 PC 0.2.6+",
+                checked = current.gamepadUseUdp,
+                onCheckedChange = { onDraftChange(current.copy(gamepadUseUdp = it)) },
+            )
+            Text(
+                "移动",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            GamepadSliderSetting(
+                label = "移动灵敏度",
+                value = current.moveSensitivity,
+                range = AppSettings.MOVE_SENS_MIN..AppSettings.MOVE_SENS_MAX,
+                hint = "左半屏移动轮盘",
+                onChange = { onDraftChange(current.copy(moveSensitivity = it)) },
+            )
+            GamepadSliderSetting(
+                label = "移动死区",
+                value = current.moveDeadzone,
+                range = AppSettings.MOVE_DEADZONE_MIN..AppSettings.MOVE_DEADZONE_MAX,
+                hint = "轮盘中心无响应区，越大越不易误触",
+                onChange = { onDraftChange(current.copy(moveDeadzone = it)) },
+            )
+            Text(
+                "腰射瞄准",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            GamepadSliderSetting(
+                label = "水平",
+                value = current.aimSensitivityX,
+                range = AppSettings.AIM_SENS_X_MIN..AppSettings.AIM_SENS_X_MAX,
+                hint = "未开镜、未开火；环顾与转身",
+                onChange = {
+                    onDraftChange(
+                        current.copy(
+                            aimSensitivityX = it,
+                            aimSensitivity = it,
+                        ),
+                    )
+                },
+            )
+            GamepadSliderSetting(
+                label = "垂直",
+                value = current.aimSensitivityY,
+                range = AppSettings.AIM_SENS_Y_MIN..AppSettings.AIM_SENS_Y_MAX,
+                hint = "未开镜、未开火；上下看",
+                onChange = { onDraftChange(current.copy(aimSensitivityY = it)) },
+            )
+            Text(
+                "开镜瞄准",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            GamepadSliderSetting(
+                label = "水平",
+                value = current.adsAimSensitivityX,
+                range = AppSettings.AIM_SENS_X_MIN..AppSettings.AIM_SENS_X_MAX,
+                hint = "开镜跟枪；通常低于腰射",
+                onChange = { onDraftChange(current.copy(adsAimSensitivityX = it)) },
+            )
+            GamepadSliderSetting(
+                label = "垂直",
+                value = current.adsAimSensitivityY,
+                range = AppSettings.AIM_SENS_Y_MIN..AppSettings.AIM_SENS_Y_MAX,
+                hint = "开镜上下微调",
+                onChange = { onDraftChange(current.copy(adsAimSensitivityY = it)) },
+            )
+            Text(
+                "开火瞄准",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            GamepadSliderSetting(
+                label = "腰射开火 · 水平",
+                value = current.fireAimSensitivityX,
+                range = AppSettings.AIM_SENS_X_MIN..AppSettings.AIM_SENS_X_MAX,
+                onChange = { onDraftChange(current.copy(fireAimSensitivityX = it)) },
+            )
+            GamepadSliderSetting(
+                label = "腰射开火 · 垂直",
+                value = current.fireAimSensitivityY,
+                range = AppSettings.AIM_SENS_Y_MIN..AppSettings.AIM_SENS_Y_MAX,
+                hint = "压枪时可略低于腰射",
+                onChange = { onDraftChange(current.copy(fireAimSensitivityY = it)) },
+            )
+            GamepadSliderSetting(
+                label = "开镜开火 · 水平",
+                value = current.fireAdsAimSensitivityX,
+                range = AppSettings.AIM_SENS_X_MIN..AppSettings.AIM_SENS_X_MAX,
+                onChange = { onDraftChange(current.copy(fireAdsAimSensitivityX = it)) },
+            )
+            GamepadSliderSetting(
+                label = "开镜开火 · 垂直",
+                value = current.fireAdsAimSensitivityY,
+                range = AppSettings.AIM_SENS_Y_MIN..AppSettings.AIM_SENS_Y_MAX,
+                hint = "开镜压枪；偏低更稳",
+                onChange = { onDraftChange(current.copy(fireAdsAimSensitivityY = it)) },
+            )
+            Text(
+                "高级",
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            GamepadSliderSetting(
+                label = "腰射滑动加速",
+                value = current.aimSwipeAcceleration,
+                range = AppSettings.AIM_SWIPE_ACCEL_MIN..AppSettings.AIM_SWIPE_ACCEL_MAX,
+                hint = "仅腰射；0 匀速，越大甩枪越快；开镜/开火线性",
+                onChange = { onDraftChange(current.copy(aimSwipeAcceleration = it)) },
+            )
+                    GamepadSliderSetting(
+                        label = "瞄准平滑",
+                        value = current.aimSmoothing,
+                        range = AppSettings.AIM_SMOOTHING_MIN..AppSettings.AIM_SMOOTHING_MAX,
+                        hint = "越大越稳、越小越跟手；甩枪时自动减弱",
+                        onChange = { onDraftChange(current.copy(aimSmoothing = it)) },
+                    )
+                    RowSwitch(
+                        title = "瞄准静止衰减",
+                        subtitle = "手指停住约 45ms 后视角逐渐停止，避免划完仍持续转动",
+                        checked = current.aimIdleDecay,
+                        onCheckedChange = { onDraftChange(current.copy(aimIdleDecay = it)) },
+                    )
+                    GamepadSliderSetting(
+                label = "控件透明度",
+                value = current.gamepadControlAlpha,
+                range = AppSettings.GAMEPAD_ALPHA_MIN..AppSettings.GAMEPAD_ALPHA_MAX,
+                onChange = { onDraftChange(current.copy(gamepadControlAlpha = it)) },
+            )
+            Text(
+                "游戏中仅按键与移动轮盘可见；瞄准区游戏中透明，编辑布局时显示参考框",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            RowSwitch(
+                title = "非固定移动轮盘",
+                subtitle = "关闭时左下固定小轮盘（推荐）；开启则在触点出现轮盘",
+                checked = current.gamepadFloatingStick,
+                onCheckedChange = { onDraftChange(current.copy(gamepadFloatingStick = it)) },
+            )
+            Text(
+                "左半屏移动、右半屏瞄准；编辑布局中可为每个键单独调大小与透明度",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            OutlinedButton(
+                onClick = {
+                    viewModel.saveSettings(current)
+                    context.findActivity()?.setGamepadLandscapeLock(true)
+                    viewModel.requestGamepadLayoutEdit()
+                    onSaved()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+            ) {
+                Text("编辑按键布局")
+            }
+            OutlinedButton(
+                onClick = {
+                    onDraftChange(viewModel.resetGamepadTuning(current))
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+            ) {
+                Text("恢复灵敏度默认值")
+            }
+            OutlinedButton(
+                onClick = {
+                    onDraftChange(viewModel.resetGamepadLayout(current))
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+            ) {
+                Text("恢复 Apex 默认布局")
+            }
+            Button(
+                onClick = {
+                    val updated = current.copy(shooterGamepadMode = false)
+                    viewModel.saveSettings(updated)
+                    onDraftChange(updated)
+                    onSaved()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary),
+            ) {
+                Text("退出游戏模式")
+            }
         }
     }
 }

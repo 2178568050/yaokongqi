@@ -203,6 +203,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         )
     }
 
+    fun flushMouseMove() = manager.flushPendingMove()
+
     fun sendMouseLeftClick() = manager.sendMouseLeftClick()
 
     fun sendMouseDoubleClick() = manager.sendMouseDoubleClick()
@@ -363,15 +365,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun onAppBackground() {
         manager.setPcInputEnabled(false)
         gamepadEngine.reset()
-        manager.updateGamepadSnapshot(gamepadEngine.tick(appSettings.value.aimDecay))
+        manager.updateGamepadSnapshot(gamepadEngine.tick())
         TrackpadLongPressController.cancelAll()
         bumpInputSession()
     }
 
     fun enterGamepadMode() {
         if (connectionInfo.value.state != ConnectionState.Connected) return
-        val hz = appSettings.value.gamepadPollHz
-        manager.setRemoteInputMode(RemoteInputMode.GAMEPAD, hz)
+        val settings = appSettings.value
+        manager.setRemoteInputMode(
+            RemoteInputMode.GAMEPAD,
+            settings.gamepadPollHz,
+            settings.gamepadUseUdp,
+        )
+    }
+
+    /** 从遥控页一键进入射击模式（需已连接 PC） */
+    fun enterShooterGamepadMode() {
+        if (connectionInfo.value.state != ConnectionState.Connected) return
+        val updated = appSettings.value.copy(shooterGamepadMode = true).clamped()
+        saveSettings(updated)
+        enterGamepadMode()
     }
 
     /** 连接恢复后重新通知 PC 进入手柄模式（断联期间 UI 仍可编辑布局） */
@@ -391,17 +405,45 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         manager.setRemoteInputMode(RemoteInputMode.KEYBOARD_MOUSE)
     }
 
-    fun runGamepadLoop(pollHz: Int, aimDecay: Float) {
+    fun runGamepadLoop(pollHz: Int, aimIdleDecay: Boolean = true) {
         gamepadLoopJob?.cancel()
         gamepadLoopJob = viewModelScope.launch {
-            val intervalMs = (1000.0 / pollHz.coerceIn(60, 250)).coerceAtLeast(4.0).toLong()
+            val hz = pollHz.coerceIn(60, 500)
+            val intervalNs = (1_000_000_000.0 / hz).toLong().coerceAtLeast(2_000_000L)
+            val intervalMs = intervalNs / 1_000_000f
+            var nextTick = System.nanoTime()
             while (isActive) {
                 if (connectionInfo.value.state != ConnectionState.Connected) break
-                val snapshot = gamepadEngine.tick(aimDecay)
-                manager.updateGamepadSnapshot(snapshot)
-                delay(intervalMs)
+                if (gamepadEngine.isAimGestureActive) {
+                    if (aimIdleDecay && gamepadEngine.tickAimIdleDecay(aimIdleDecay, intervalMs)) {
+                        manager.updateGamepadSnapshot(gamepadEngine.currentSnapshot())
+                    }
+                } else {
+                    val snapshot = gamepadEngine.tick()
+                    manager.updateGamepadSnapshot(snapshot)
+                }
+                nextTick += intervalNs
+                val waitNs = nextTick - System.nanoTime()
+                if (waitNs > 0L) {
+                    val waitMs = waitNs / 1_000_000L
+                    if (waitMs > 0L) delay(waitMs)
+                } else {
+                    nextTick = System.nanoTime()
+                }
             }
         }
+    }
+
+    /** 按键 / 摇杆变化后立即上报，不等待下一发送周期 */
+    fun publishGamepadState() {
+        if (connectionInfo.value.state != ConnectionState.Connected) return
+        manager.updateGamepadSnapshot(gamepadEngine.currentSnapshot())
+    }
+
+    /** 瞄准触摸后立即上报（按住期间维持 rx/ry，不清零） */
+    fun publishAimDelta() {
+        if (connectionInfo.value.state != ConnectionState.Connected) return
+        manager.updateGamepadSnapshot(gamepadEngine.currentSnapshot())
     }
 
     /** 编辑布局时暂停手柄输入上报，减轻连接负载 */
@@ -424,6 +466,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun resetGamepadLayout(settings: AppSettings): AppSettings {
         val updated = settings.copy(gamepadLayout = GamepadLayouts.default())
+        saveSettings(updated)
+        return updated
+    }
+
+    /** 恢复射击灵敏度/轮盘等调参，保留布局与模式开关 */
+    fun resetGamepadTuning(settings: AppSettings): AppSettings {
+        val d = AppSettings(shooterGamepadMode = settings.shooterGamepadMode)
+        val updated = settings.copy(
+            gamepadPollHz = d.gamepadPollHz,
+            gamepadUseUdp = d.gamepadUseUdp,
+            aimSensitivity = d.aimSensitivity,
+            aimSensitivityX = d.aimSensitivityX,
+            aimSensitivityY = d.aimSensitivityY,
+            adsAimSensitivityX = d.adsAimSensitivityX,
+            adsAimSensitivityY = d.adsAimSensitivityY,
+            fireAimSensitivityX = d.fireAimSensitivityX,
+            fireAimSensitivityY = d.fireAimSensitivityY,
+            fireAdsAimSensitivityX = d.fireAdsAimSensitivityX,
+            fireAdsAimSensitivityY = d.fireAdsAimSensitivityY,
+            moveSensitivity = d.moveSensitivity,
+            aimSmoothing = d.aimSmoothing,
+            aimSwipeAcceleration = d.aimSwipeAcceleration,
+            moveDeadzone = d.moveDeadzone,
+            gamepadControlAlpha = d.gamepadControlAlpha,
+            gamepadFloatingStick = d.gamepadFloatingStick,
+            aimIdleDecay = d.aimIdleDecay,
+        )
         saveSettings(updated)
         return updated
     }

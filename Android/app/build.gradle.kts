@@ -13,13 +13,15 @@ android {
         applicationId = "com.yaokongqi.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.2.4"
+        versionCode = 9
+        versionName = "0.2.6"
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            // 本地 dist 分发：用 debug 证书签名，避免 unsigned 包无法安装
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

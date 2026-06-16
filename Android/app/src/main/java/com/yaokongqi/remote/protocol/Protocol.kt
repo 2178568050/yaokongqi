@@ -88,6 +88,8 @@ data class IncomingMessage(
     val msg: String? = null,
     val seq: Int? = null,
     val ts: Long? = null,
+    @SerialName("udp_port") val udpPort: Int? = null,
+    @SerialName("udp_key") val udpKey: Long? = null,
 )
 
 fun encodePair(magic: Int, pin: String, device: String): String =
@@ -157,7 +159,7 @@ fun encodeInputMode(token: String, mode: String, hz: Int = 180): String =
         append("\",\"mode\":\"")
         append(mode)
         append("\",\"hz\":")
-        append(hz.coerceIn(60, 250))
+        append(hz.coerceIn(60, 500))
         append('}')
     }
 

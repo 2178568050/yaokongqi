@@ -16,12 +16,14 @@ import androidx.compose.material3.MaterialTheme
 import com.yaokongqi.remote.ui.MainViewModel
 import com.yaokongqi.remote.ui.screens.MainScreen
 import com.yaokongqi.remote.ui.theme.YaokongqiTheme
+import com.yaokongqi.remote.ui.util.DisplayPerformance
 
 class MainActivity : ComponentActivity() {
     private lateinit var mainViewModel: MainViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DisplayPerformance.applyMaxPerformance(this)
         enableEdgeToEdge()
         mainViewModel = ViewModelProvider(this)[MainViewModel::class.java]
         setContent {

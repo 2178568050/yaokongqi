@@ -8,15 +8,15 @@ object GamepadActionBindings {
     fun apply(engine: GamepadInputEngine, id: GamepadControlId, pressed: Boolean) {
         when (id) {
             GamepadControlId.FIRE, GamepadControlId.RT -> engine.setRightTrigger(pressed)
-            GamepadControlId.ADS, GamepadControlId.LT -> engine.setLeftTrigger(pressed)
+            GamepadControlId.ADS, GamepadControlId.LT -> Unit
             GamepadControlId.JUMP, GamepadControlId.A -> engine.setButton(GamepadButtons.A, pressed)
             GamepadControlId.SLIDE, GamepadControlId.B -> engine.setButton(GamepadButtons.B, pressed)
             GamepadControlId.RELOAD,
             GamepadControlId.INTERACT,
             GamepadControlId.X,
             -> engine.setButton(GamepadButtons.X, pressed)
-            GamepadControlId.TACTICAL, GamepadControlId.LB -> engine.setButton(GamepadButtons.LB, pressed)
-            GamepadControlId.ULTIMATE, GamepadControlId.RB -> engine.setButton(GamepadButtons.RB, pressed)
+            GamepadControlId.TACTICAL, GamepadControlId.LB -> engine.setTacticalBumper(pressed)
+            GamepadControlId.ULTIMATE, GamepadControlId.RB -> engine.setUltimateCombo(pressed)
             GamepadControlId.THROW -> engine.setButton(GamepadButtons.RIGHT, pressed)
             GamepadControlId.HEAL -> engine.setButton(GamepadButtons.UP, pressed)
             GamepadControlId.SURVIVAL -> engine.setButton(GamepadButtons.LEFT, pressed)

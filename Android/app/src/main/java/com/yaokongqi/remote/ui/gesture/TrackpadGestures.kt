@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+
 package com.yaokongqi.remote.ui.gesture
 
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -9,14 +11,13 @@ import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
+import com.yaokongqi.remote.ui.game.HighRateTouch.forEachDeltaSample
 import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.roundToInt
 
 private const val SWIPE_THRESHOLD_PX = 100f
 private const val WHEEL_DELTA = 120
 private const val MOVE_DEAD_ZONE = 5f
-private const val MOVE_SEND_EPSILON = 0.012f
 private const val LONG_PRESS_MS = 450L
 
 data class TrackpadCallbacks(
@@ -31,6 +32,8 @@ data class TrackpadCallbacks(
     val onThreeFingerSwipeUp: () -> Unit = {},
     /** 多指（≥3）按下时回调，用于阻止父级/系统抢手势 */
     val onMultiTouchActive: (Boolean) -> Unit = {},
+    /** 手势结束，刷掉鼠标移动亚像素余量 */
+    val onGestureEnd: () -> Unit = {},
 )
 
 fun Modifier.laptopTrackpadGestures(
@@ -87,14 +90,14 @@ fun Modifier.laptopTrackpadGestures(
                 }
 
                 pressed.forEach { change ->
-                    val prev = positions[change.id]
-                    if (prev != null && change.positionChanged()) {
-                        val delta = change.position - prev
-                        totalMoveX += delta.x
-                        totalMoveY += delta.y
-                        accumX += delta.x
-                        accumY += delta.y
-                        if (hypot(totalMoveX, totalMoveY) > MOVE_DEAD_ZONE) moved = true
+                    if (change.positionChanged()) {
+                        change.forEachDeltaSample { dx, dy, _ ->
+                            totalMoveX += dx
+                            totalMoveY += dy
+                            accumX += dx
+                            accumY += dy
+                            if (hypot(totalMoveX, totalMoveY) > MOVE_DEAD_ZONE) moved = true
+                        }
                         if (!multiTouchSteal) change.consume()
                     }
                     positions[change.id] = change.position
@@ -145,6 +148,8 @@ fun Modifier.laptopTrackpadGestures(
             if (multiTouchSteal) {
                 callbacks.onMultiTouchActive(false)
             }
+            flushMove(accumX, accumY, callbacks.onMove)
+            callbacks.onGestureEnd()
         }
 
         if (lastEventCancelled) return@awaitEachGesture
@@ -193,9 +198,7 @@ private fun dispatchMultiFingerSwipe(
 }
 
 private fun flushMove(accumX: Float, accumY: Float, onMove: (Float, Float) -> Unit): Pair<Float, Float> {
-    if (abs(accumX) < MOVE_SEND_EPSILON && abs(accumY) < MOVE_SEND_EPSILON) {
-        return accumX to accumY
-    }
+    if (accumX == 0f && accumY == 0f) return accumX to accumY
     onMove(accumX, accumY)
     return 0f to 0f
 }

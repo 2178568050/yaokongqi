@@ -5,8 +5,9 @@ import android.content.Intent
 import android.os.Build
 import com.yaokongqi.remote.AppConfig
 import com.yaokongqi.remote.service.RemoteService
+import com.yaokongqi.remote.protocol.GamepadBinary
+import com.yaokongqi.remote.protocol.clampGamepadHz
 import com.yaokongqi.remote.protocol.encodeCombo
-import com.yaokongqi.remote.protocol.encodeGamepad
 import com.yaokongqi.remote.protocol.encodeInputMode
 import com.yaokongqi.remote.protocol.encodeKey
 import com.yaokongqi.remote.protocol.encodeMouseClick
@@ -34,9 +35,9 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private fun safeParseIncoming(text: String) =
@@ -72,8 +73,6 @@ class ConnectionManager(
     private var webSocket: WebSocket? = null
     private var heartbeatJob: Job? = null
     private var qualityJob: Job? = null
-    private var moveFlushJob: Job? = null
-    private var gamepadSendJob: Job? = null
     private var sessionToken: String? = null
     private var activeHost: String? = null
     private var connectedPcName: String? = null
@@ -119,6 +118,12 @@ class ConnectionManager(
     private var gamepadPollHz = 180
 
     @Volatile
+    private var gamepadUseUdp = true
+
+    private val udpSender = UdpGamepadSender()
+    private val gamepadSeq = AtomicInteger(0)
+
+    @Volatile
     private var gamepadSnapshot = GamepadSnapshot()
 
     private val _gamepadError = MutableStateFlow<String?>(null)
@@ -153,8 +158,9 @@ class ConnectionManager(
     private fun canSendGamepad(): Boolean =
         canSendPcInput() && remoteInputMode == RemoteInputMode.GAMEPAD
 
-    fun setRemoteInputMode(mode: RemoteInputMode, pollHz: Int = gamepadPollHz) {
-        gamepadPollHz = pollHz.coerceIn(60, 250)
+    fun setRemoteInputMode(mode: RemoteInputMode, pollHz: Int = gamepadPollHz, useUdp: Boolean = gamepadUseUdp) {
+        gamepadPollHz = clampGamepadHz(pollHz)
+        gamepadUseUdp = useUdp
         desiredRemoteInputMode = mode
         if (remoteInputMode == mode && mode != RemoteInputMode.GAMEPAD) return
         remoteInputMode = mode
@@ -162,19 +168,55 @@ class ConnectionManager(
         if (mode == RemoteInputMode.GAMEPAD) {
             stopMoveFlusher()
             sendInputModeMessage("gamepad")
-            startGamepadSender()
         } else {
-            stopGamepadSender()
             sendZeroGamepad()
             sendInputModeMessage("keyboard_mouse")
-            if (_info.value.state == ConnectionState.Connected) {
-                startMoveFlusher()
-            }
         }
     }
 
     fun updateGamepadSnapshot(snapshot: GamepadSnapshot) {
         gamepadSnapshot = snapshot
+        flushGamepadSnapshotIfChanged()
+    }
+
+    private fun flushGamepadSnapshotIfChanged() {
+        if (!canSendGamepad()) return
+        val snap = gamepadSnapshot
+        if (snap == lastSentGamepadSnapshot) return
+        val sent = if (gamepadUseUdp && udpSender.isReady()) {
+            udpSender.send(snap)
+        } else {
+            val ws = webSocket ?: return
+            safeSendBinary(
+                ws,
+                GamepadBinary.encodeWsFrame(
+                    seq = gamepadSeq.incrementAndGet() and 0xFFFF,
+                    lx = snap.lx,
+                    ly = snap.ly,
+                    rx = snap.rx,
+                    ry = snap.ry,
+                    lt = snap.lt,
+                    rt = snap.rt,
+                    buttons = snap.buttons,
+                ),
+            )
+        }
+        if (sent) {
+            lastSentGamepadSnapshot = snap
+        }
+    }
+
+    private fun applyUdpSession(host: String?, udpPort: Int?, udpKey: Long?) {
+        if (!gamepadUseUdp || host.isNullOrBlank()) return
+        val port = udpPort ?: AppConfig.UDP_LISTEN_PORT
+        val key = udpKey?.toInt() ?: return
+        if (key == 0) return
+        udpSender.configure(host, port, key)
+    }
+
+    private fun parseUdpFromMessage(text: String) {
+        val msg = safeParseIncoming(text) ?: return
+        applyUdpSession(activeHost, msg.udpPort, msg.udpKey)
     }
 
     fun clearGamepadError() {
@@ -229,6 +271,7 @@ class ConnectionManager(
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (gen != connectionGeneration) return
+                parseUdpFromMessage(text)
                 handleMessage(text) { token, pcName ->
                     sessionToken = token
                     connectedPcName = pcName
@@ -305,6 +348,7 @@ class ConnectionManager(
                 val msg = safeParseIncoming(text) ?: return
                 when (msg.type) {
                     "pong" -> {
+                        parseUdpFromMessage(text)
                         onPongReceived(msg.seq ?: 0)
                         if (_info.value.state != ConnectionState.Connected) {
                             markConnected(pcName ?: deviceStore.device(host)?.pcName)
@@ -324,7 +368,6 @@ class ConnectionManager(
                         if (msg.code == "GAMEPAD_UNAVAILABLE") {
                             _gamepadError.value = msg.msg ?: "PC 未安装 ViGEmBus 驱动"
                             remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
-                            stopGamepadSender()
                             return
                         }
                         if (msg.code == "AUTH_FAILED") {
@@ -376,10 +419,11 @@ class ConnectionManager(
         stopHeartbeat()
         stopQualityProbe()
         stopMoveFlusher()
-        stopGamepadSender()
         remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
         gamepadSnapshot = GamepadSnapshot()
         lastSentGamepadSnapshot = GamepadSnapshot()
+        gamepadSeq.set(0)
+        udpSender.close()
         _gamepadError.value = null
         stopConnectionService()
         sessionToken = null
@@ -402,7 +446,6 @@ class ConnectionManager(
                 if (msg.code == "GAMEPAD_UNAVAILABLE") {
                     _gamepadError.value = msg.msg ?: "PC 未安装 ViGEmBus 驱动"
                     remoteInputMode = RemoteInputMode.KEYBOARD_MOUSE
-                    stopGamepadSender()
                     return
                 }
                 webSocket?.close(4000, msg.code)
@@ -426,8 +469,12 @@ class ConnectionManager(
             packetLossPercent = computePacketLoss(),
         )
         when (desiredRemoteInputMode) {
-            RemoteInputMode.GAMEPAD -> setRemoteInputMode(RemoteInputMode.GAMEPAD, gamepadPollHz)
-            RemoteInputMode.KEYBOARD_MOUSE -> startMoveFlusher()
+            RemoteInputMode.GAMEPAD -> setRemoteInputMode(
+                RemoteInputMode.GAMEPAD,
+                gamepadPollHz,
+                gamepadUseUdp,
+            )
+            RemoteInputMode.KEYBOARD_MOUSE -> Unit
         }
         startConnectionService(pcName ?: connectedPcName)
     }
@@ -451,6 +498,17 @@ class ConnectionManager(
         }
         if (!safeSend(ws, encodePing(seq, now))) {
             recordOutcome(false)
+        }
+    }
+
+    private fun safeSendBinary(ws: WebSocket, payload: ByteArray): Boolean {
+        if (ws != webSocket) return false
+        return synchronized(this) {
+            try {
+                ws.send(payload.toByteString())
+            } catch (_: Exception) {
+                false
+            }
         }
     }
 
@@ -533,14 +591,16 @@ class ConnectionManager(
     fun sendMouseMove(dx: Float, dy: Float) {
         if (!canSendKeyboardMouse()) return
         if (dx == 0f && dy == 0f) return
-        val flushNow = synchronized(this) {
+        synchronized(this) {
             moveAccumX += dx
             moveAccumY += dy
-            hypot(moveAccumX, moveAccumY) >= MOVE_FLUSH_THRESHOLD_PX
         }
-        if (flushNow) {
-            flushPendingMove()
-        }
+        flushPendingMove()
+    }
+
+    /** 手势结束时刷掉亚像素余量 */
+    fun flushPendingMove() {
+        flushPendingMoveInternal()
     }
 
     fun sendMouseClick(button: String, action: String = "tap") {
@@ -646,24 +706,12 @@ class ConnectionManager(
         qualityJob = null
     }
 
-    private fun startMoveFlusher() {
-        stopMoveFlusher()
-        moveFlushJob = scope.launch(Dispatchers.IO) {
-            while (isActive) {
-                delay(MOVE_FLUSH_MS)
-                flushPendingMove()
-            }
-        }
-    }
-
     private fun stopMoveFlusher() {
-        moveFlushJob?.cancel()
-        moveFlushJob = null
         moveAccumX = 0f
         moveAccumY = 0f
     }
 
-    private fun flushPendingMove() {
+    private fun flushPendingMoveInternal() {
         if (!canSendKeyboardMouse()) return
         val token = sessionToken ?: return
         if (webSocket == null) return
@@ -685,45 +733,24 @@ class ConnectionManager(
     }
 
     private fun sendZeroGamepad() {
-        val token = sessionToken ?: return
-        safeSend(encodeGamepad(token, 0, 0, 0, 0, 0, 0, 0))
-    }
-
-    private fun startGamepadSender() {
-        stopGamepadSender()
-        val intervalMs = (1000.0 / gamepadPollHz).coerceAtLeast(4.0).toLong()
-        gamepadSendJob = scope.launch(Dispatchers.IO) {
-            while (isActive) {
-                if (!canSendGamepad()) break
-                val token = sessionToken ?: break
-                val ws = webSocket ?: break
-                val snap = gamepadSnapshot
-                // 空闲时不重复发送全零帧，减轻 WiFi 与 PC 负载
-                if (snap != lastSentGamepadSnapshot) {
-                    val sent = safeSend(
-                        ws,
-                        encodeGamepad(
-                            token,
-                            snap.lx,
-                            snap.ly,
-                            snap.rx,
-                            snap.ry,
-                            snap.lt,
-                            snap.rt,
-                            snap.buttons,
-                        ),
-                    )
-                    if (!sent) break
-                    lastSentGamepadSnapshot = snap
-                }
-                delay(intervalMs)
-            }
+        val zero = GamepadSnapshot()
+        if (gamepadUseUdp && udpSender.isReady()) {
+            udpSender.send(zero)
         }
-    }
-
-    private fun stopGamepadSender() {
-        gamepadSendJob?.cancel()
-        gamepadSendJob = null
+        val ws = webSocket ?: return
+        safeSendBinary(
+            ws,
+            GamepadBinary.encodeWsFrame(
+                seq = gamepadSeq.incrementAndGet() and 0xFFFF,
+                lx = 0,
+                ly = 0,
+                rx = 0,
+                ry = 0,
+                lt = 0,
+                rt = 0,
+                buttons = 0,
+            ),
+        )
     }
 
     private fun cancelScheduledReconnect() {
@@ -770,9 +797,6 @@ class ConnectionManager(
     }
 
     private companion object {
-        /** 兜底刷新间隔；主要依赖位移阈值即时发送 */
-        const val MOVE_FLUSH_MS = 2L
-        const val MOVE_FLUSH_THRESHOLD_PX = 0.45f
         const val MAX_AUTO_RECONNECT = 6
         const val RECONNECT_DEBOUNCE_MS = 5_000L
     }

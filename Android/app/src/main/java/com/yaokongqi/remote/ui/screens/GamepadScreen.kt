@@ -1,7 +1,6 @@
 package com.yaokongqi.remote.ui.screens
 
 import android.content.res.Configuration
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -58,10 +57,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -84,9 +81,21 @@ import com.yaokongqi.remote.model.GamepadLayouts
 import com.yaokongqi.remote.model.GamepadSizeLimits
 import com.yaokongqi.remote.ui.MainViewModel
 import com.yaokongqi.remote.ui.game.GamepadActionBindings
+import com.yaokongqi.remote.ui.game.GamepadActionIconImage
 import com.yaokongqi.remote.ui.game.GamepadActionIcons
+import com.yaokongqi.remote.ui.game.resolveGamepadControlAlpha
 import com.yaokongqi.remote.ui.game.GamepadInputEngine
+import com.yaokongqi.remote.ui.game.HighRateTouch
+import com.yaokongqi.remote.ui.game.HighRateTouch.forEachDeltaSample
+import com.yaokongqi.remote.ui.game.HighRateTouch.forEachPositionSample
+import com.yaokongqi.remote.ui.game.GamepadRadialWheelButton
+import com.yaokongqi.remote.ui.game.GamepadTacticalButton
+import com.yaokongqi.remote.ui.game.GamepadToggleButton
+import com.yaokongqi.remote.ui.game.RadialWheelOverlay
+import com.yaokongqi.remote.ui.game.RadialWheelSession
+import com.yaokongqi.remote.ui.game.TacticalAimOverlay
 import com.yaokongqi.remote.ui.theme.Primary
+import com.yaokongqi.remote.ui.util.DisplayPerformance
 import com.yaokongqi.remote.ui.util.findActivity
 import com.yaokongqi.remote.ui.util.setGamepadLandscapeLock
 import kotlin.math.max
@@ -124,6 +133,7 @@ fun GamepadScreen(
 
     DisposableEffect(activity) {
         activity?.setGamepadLandscapeLock(true)
+        activity?.let { DisplayPerformance.applyMaxPerformance(it) }
         onDispose {
             activity?.setGamepadLandscapeLock(false)
         }
@@ -150,12 +160,7 @@ fun GamepadScreen(
         isConnected,
         editMode,
         settings.gamepadPollHz,
-        settings.aimDecay,
-        settings.moveSensitivity,
-        settings.aimSensitivityX,
-        settings.aimSensitivityY,
-        settings.aimSmoothing,
-        settings.moveDeadzone,
+        settings.aimIdleDecay,
     ) {
         viewModel.gamepadEngine.setAimPollHz(settings.gamepadPollHz)
         if (!isConnected || editMode) {
@@ -164,7 +169,7 @@ fun GamepadScreen(
         }
         viewModel.runGamepadLoop(
             pollHz = settings.gamepadPollHz,
-            aimDecay = settings.aimDecay,
+            aimIdleDecay = settings.aimIdleDecay,
         )
     }
 
@@ -197,6 +202,8 @@ fun GamepadScreen(
     }
 
     val engine = viewModel.gamepadEngine
+    var radialSession by remember { mutableStateOf<RadialWheelSession?>(null) }
+    var tacticalAimActive by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
         modifier = Modifier
@@ -212,18 +219,19 @@ fun GamepadScreen(
             interactive = !editMode,
             showHint = editMode,
             onAimBegin = { engine.beginAim() },
-            onAimDelta = { dx, dy ->
-                val ads = engine.isAdsActive
+            onAimDelta = { dx, dy, uptimeMillis ->
                 engine.addAimDelta(
                     dx,
                     dy,
-                    if (ads) settings.adsAimSensitivityX else settings.aimSensitivityX,
-                    if (ads) settings.adsAimSensitivityY else settings.aimSensitivityY,
-                    settings.aimSmoothing,
-                    settings.aimSwipeAcceleration,
+                    settings,
+                    eventTimeNanos = uptimeMillis * 1_000_000L,
                 )
+                viewModel.publishAimDelta()
             },
-            onAimRelease = { engine.releaseAim() },
+            onAimRelease = {
+                engine.releaseAim()
+                viewModel.publishGamepadState()
+            },
         )
 
         if (!editMode) {
@@ -238,9 +246,11 @@ fun GamepadScreen(
                 interactive = true,
                 onStick = { lx, ly ->
                     engine.setMoveStick(lx, ly, settings.moveSensitivity)
+                    viewModel.publishGamepadState()
                 },
                 onSprintChange = { sprint ->
                     engine.setButton(GamepadButtons.LS, sprint)
+                    viewModel.publishGamepadState()
                 },
             )
         }
@@ -276,23 +286,94 @@ fun GamepadScreen(
                         ringSizeDp = placement.sizeDp.dp,
                         controlAlpha = placement.effectiveAlpha(settings.gamepadControlAlpha),
                         active = false,
-                        sprintLocked = false,
+                        sprintActive = false,
                         modifier = childModifier,
                     )
-                } else {
-                    GamepadActionButton(
-                        id = placement.id,
-                        modifier = childModifier,
-                        accent = placement.accent,
-                        globalControlAlpha = settings.gamepadControlAlpha,
-                        placementOpacity = placement.opacity,
-                        hapticEnabled = settings.hapticFeedback,
-                        interactive = !editMode,
-                        onPressChange = { pressed -> handleGamepadButton(engine, placement.id, pressed) },
-                    )
+                } else when (placement.id) {
+                    GamepadControlId.HEAL, GamepadControlId.THROW -> {
+                        GamepadRadialWheelButton(
+                            id = placement.id,
+                            engine = engine,
+                            modifier = childModifier,
+                            globalControlAlpha = settings.gamepadControlAlpha,
+                            placementOpacity = placement.opacity,
+                            hapticEnabled = settings.hapticFeedback,
+                            interactive = !editMode,
+                            onWheelChange = { session -> radialSession = session },
+                            onPublishState = viewModel::publishGamepadState,
+                        )
+                    }
+                    GamepadControlId.ADS, GamepadControlId.LT -> {
+                        GamepadToggleButton(
+                            id = placement.id,
+                            modifier = childModifier,
+                            globalControlAlpha = settings.gamepadControlAlpha,
+                            placementOpacity = placement.opacity,
+                            hapticEnabled = settings.hapticFeedback,
+                            interactive = !editMode,
+                            onToggle = {
+                                engine.toggleLeftTrigger()
+                                viewModel.publishGamepadState()
+                            },
+                        )
+                    }
+                    GamepadControlId.TACTICAL -> {
+                        GamepadTacticalButton(
+                            id = placement.id,
+                            modifier = childModifier,
+                            globalControlAlpha = settings.gamepadControlAlpha,
+                            placementOpacity = placement.opacity,
+                            hapticEnabled = settings.hapticFeedback,
+                            interactive = !editMode,
+                            engine = engine,
+                            onAimModeChange = { active -> tacticalAimActive = active },
+                            onPublishState = viewModel::publishGamepadState,
+                            onAimDelta = { dx, dy, uptimeMillis ->
+                                engine.addAimDelta(
+                                    dx,
+                                    dy,
+                                    settings,
+                                    eventTimeNanos = uptimeMillis * 1_000_000L,
+                                )
+                                viewModel.publishAimDelta()
+                            },
+                        )
+                    }
+                    else -> {
+                        GamepadActionButton(
+                            id = placement.id,
+                            modifier = childModifier,
+                            accent = placement.accent,
+                            globalControlAlpha = settings.gamepadControlAlpha,
+                            placementOpacity = placement.opacity,
+                            hapticEnabled = settings.hapticFeedback,
+                            interactive = !editMode,
+                            onPressChange = { pressed ->
+                                handleGamepadButton(engine, placement.id, pressed)
+                                viewModel.publishGamepadState()
+                            },
+                        )
+                    }
                 }
             }
         }
+
+        radialSession?.let { session ->
+            RadialWheelOverlay(session = session)
+        }
+
+        TacticalAimOverlay(
+            active = tacticalAimActive,
+            onAimDelta = { dx, dy, uptimeMillis ->
+                engine.addAimDelta(
+                    dx,
+                    dy,
+                    settings,
+                    eventTimeNanos = uptimeMillis * 1_000_000L,
+                )
+                viewModel.publishAimDelta()
+            },
+        )
 
         GamepadTopBar(
             editMode = editMode,
@@ -470,7 +551,12 @@ private fun BoxScope.PlacedGamepadControl(
     content: @Composable (Modifier) -> Unit,
 ) {
     val diameterDp = placement.sizeDp.dp
-    val hitDiameterDp = if (editMode) max(placement.sizeDp, 72f).dp else diameterDp
+    val hitDiameterDp = when {
+        editMode -> max(placement.sizeDp, 72f).dp
+        placement.id == GamepadControlId.ADS || placement.id == GamepadControlId.LT ->
+            max(placement.sizeDp, 68f).dp
+        else -> max(placement.sizeDp, 56f).dp
+    }
     val xOff = (placement.centerX * containerWidth.value - hitDiameterDp.value / 2f)
         .coerceIn(0f, (containerWidth - hitDiameterDp).value.coerceAtLeast(0f).toFloat())
     val yOff = (placement.centerY * containerHeight.value - hitDiameterDp.value / 2f)
@@ -625,15 +711,15 @@ private fun LayoutSliderRow(
 }
 
 private const val MoveStickMaxThrowRatio = 0.72f
-private const val SprintTriggerUpNorm = 0.78f
-private const val SprintCancelDownNorm = 0.32f
+private const val SprintTriggerUpNorm = 0.72f
+private const val SprintMaxLateralNorm = 0.62f
 
 @Composable
 private fun MoveStickVisual(
     ringSizeDp: Dp,
     controlAlpha: Float,
     active: Boolean,
-    sprintLocked: Boolean,
+    sprintActive: Boolean,
     knobOffsetPx: Offset = Offset.Zero,
     modifier: Modifier = Modifier,
 ) {
@@ -648,7 +734,7 @@ private fun MoveStickVisual(
     val ringAlpha by animateFloatAsState(
         targetValue = when {
             active -> (alpha + 0.22f).coerceAtMost(0.95f)
-            sprintLocked -> (alpha + 0.15f).coerceAtMost(0.88f)
+            sprintActive -> (alpha + 0.15f).coerceAtMost(0.88f)
             else -> alpha * 0.62f
         },
         animationSpec = tween(80),
@@ -657,19 +743,19 @@ private fun MoveStickVisual(
     val knobAlpha by animateFloatAsState(
         targetValue = when {
             active -> (alpha + 0.42f).coerceAtMost(1f)
-            sprintLocked -> alpha * 0.9f
+            sprintActive -> alpha * 0.9f
             else -> alpha * 0.78f
         },
         animationSpec = tween(80),
         label = "move_knob_alpha",
     )
     val ringBorder = when {
-        sprintLocked -> Primary.copy(alpha = 0.92f)
+        sprintActive -> Primary.copy(alpha = 0.92f)
         active -> Primary.copy(alpha = 0.78f)
         else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
     }
     val ringFill = MaterialTheme.colorScheme.surface.copy(
-        alpha = if (sprintLocked) 0.14f else 0.08f,
+        alpha = if (sprintActive) 0.14f else 0.08f,
     )
 
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -685,7 +771,7 @@ private fun MoveStickVisual(
                 imageVector = Icons.Filled.KeyboardArrowUp,
                 contentDescription = null,
                 tint = when {
-                    sprintLocked -> Primary.copy(alpha = 0.95f)
+                    sprintActive -> Primary.copy(alpha = 0.95f)
                     active -> Primary.copy(alpha = 0.55f)
                     else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
                 },
@@ -701,12 +787,12 @@ private fun MoveStickVisual(
                     .alpha(knobAlpha)
                     .scale(if (active) 1f else 0.96f)
                     .background(
-                        if (sprintLocked) Primary.copy(alpha = 0.72f)
+                        if (sprintActive) Primary.copy(alpha = 0.72f)
                         else Primary.copy(alpha = 0.52f),
                         CircleShape,
                     )
                     .border(
-                        width = if (active || sprintLocked) 2.dp else 1.5.dp,
+                        width = if (active || sprintActive) 2.dp else 1.5.dp,
                         color = Color.White.copy(alpha = if (active) 0.55f else 0.32f),
                         shape = CircleShape,
                     ),
@@ -748,12 +834,12 @@ private fun VirtualMoveStick(
     var active by remember { mutableStateOf(false) }
     var anchor by remember { mutableStateOf(Offset.Zero) }
     var knobOffset by remember { mutableStateOf(Offset.Zero) }
-    var sprintLocked by remember { mutableStateOf(false) }
+    var sprinting by remember { mutableStateOf(false) }
 
-    fun updateSprintLocked(locked: Boolean) {
-        if (sprintLocked == locked) return
-        sprintLocked = locked
-        onSprintChange(locked)
+    fun setSprinting(value: Boolean) {
+        if (sprinting == value) return
+        sprinting = value
+        onSprintChange(value)
     }
 
     fun clampAnchor(pos: Offset): Offset = Offset(
@@ -761,13 +847,7 @@ private fun VirtualMoveStick(
         pos.y.coerceIn(stickRadiusPx, zoneHeightPx - stickRadiusPx),
     )
 
-    fun stickBase(): Offset = when {
-        floatingStick && active && !sprintLocked -> anchor
-        else -> thumbBase
-    }
-
-    fun sprintKnobOffset(): Offset =
-        if (sprintLocked && !active) Offset(0f, -maxThrowPx * 0.92f) else knobOffset
+    fun stickBase(): Offset = if (floatingStick && active) anchor else thumbBase
 
     fun isMoveTouch(offset: Offset): Boolean {
         if (offset.x > leftBoundaryPx) return false
@@ -780,16 +860,17 @@ private fun VirtualMoveStick(
         return dist <= stickRadiusPx * 1.35f
     }
 
-    fun emitStick(clamped: Offset) {
-        val (lx, ly) = GamepadInputEngine.offsetToStickForMove(
-            clamped.x,
-            clamped.y,
-            maxThrowPx,
-            if (floatingStick) deadzone * 0.65f else deadzone,
-        )
-        if (sprintLocked) {
-            onStick(lx, 32767)
+    fun emitStick(clamped: Offset, sprint: Boolean) {
+        if (sprint) {
+            val (lx, ly) = GamepadInputEngine.sprintMoveStick(clamped.x, maxThrowPx)
+            onStick(lx, ly)
         } else {
+            val (lx, ly) = GamepadInputEngine.offsetToStickForMove(
+                clamped.x,
+                clamped.y,
+                maxThrowPx,
+                if (floatingStick) deadzone * 0.65f else deadzone,
+            )
             onStick(lx, ly)
         }
     }
@@ -814,52 +895,30 @@ private fun VirtualMoveStick(
 
         val upNorm = if (maxThrowPx > 0f) (-clamped.y / maxThrowPx) else 0f
         val lateralNorm = if (maxThrowPx > 0f) kotlin.math.abs(clamped.x) / maxThrowPx else 0f
+        val shouldSprint = upNorm >= SprintTriggerUpNorm && lateralNorm <= SprintMaxLateralNorm
 
-        if (sprintLocked && upNorm < SprintCancelDownNorm) {
-            updateSprintLocked(false)
-        } else if (
-            !sprintLocked &&
-            upNorm >= SprintTriggerUpNorm &&
-            lateralNorm <= 0.42f
-        ) {
-            updateSprintLocked(true)
+        if (shouldSprint && !sprinting) {
+            setSprinting(true)
             if (hapticEnabled) {
                 view.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
             }
+        } else if (!shouldSprint && sprinting) {
+            setSprinting(false)
         }
 
-        emitStick(if (sprintLocked) Offset(clamped.x, -maxThrowPx * 0.95f) else clamped)
+        emitStick(clamped, shouldSprint)
     }
 
     fun releaseStick() {
         active = false
         knobOffset = Offset.Zero
-        if (sprintLocked) {
-            emitStick(Offset(0f, -maxThrowPx * 0.95f))
-        } else {
-            onStick(0, 0)
-        }
-    }
-
-    fun cancelSprint() {
-        updateSprintLocked(false)
-        knobOffset = Offset.Zero
+        setSprinting(false)
         onStick(0, 0)
     }
 
-    fun tryCancelSprintOnTap(offset: Offset) {
-        val base = thumbBase
-        val rel = offset - base
-        if (sprintLocked && rel.y < -stickRadiusPx * 0.35f &&
-            kotlin.math.hypot(rel.x.toDouble(), rel.y.toDouble()) < stickRadiusPx * 1.05f
-        ) {
-            cancelSprint()
-        }
-    }
-
-    val showStick = !floatingStick || active || sprintLocked
+    val showStick = !floatingStick || active
     val base = stickBase()
-    val displayKnob = sprintKnobOffset()
+    val displayKnob = knobOffset
     val xOff = (base.x - stickRadiusPx).coerceAtLeast(0f)
     val yOff = (base.y - stickRadiusPx).coerceAtLeast(0f)
     val ringSizeDp = with(density) { (stickRadiusPx * 2f).toDp() }
@@ -876,11 +935,8 @@ private fun VirtualMoveStick(
                         detectDragGestures(
                             onDragStart = { offset ->
                                 if (!isMoveTouch(offset)) return@detectDragGestures
-                                tryCancelSprintOnTap(offset)
                                 active = true
-                                if (!sprintLocked) {
-                                    anchor = clampAnchor(offset)
-                                }
+                                anchor = clampAnchor(offset)
                                 if (hapticEnabled) {
                                     view.performHapticFeedback(
                                         android.view.HapticFeedbackConstants.KEYBOARD_TAP,
@@ -889,9 +945,11 @@ private fun VirtualMoveStick(
                                 updateFromTouch(offset)
                             },
                             onDrag = { change, _ ->
-                                if (!isMoveTouch(change.position)) return@detectDragGestures
                                 change.consume()
-                                updateFromTouch(change.position)
+                                change.forEachPositionSample { pos ->
+                                    if (!isMoveTouch(pos)) return@forEachPositionSample
+                                    updateFromTouch(pos)
+                                }
                             },
                             onDragEnd = { releaseStick() },
                             onDragCancel = { releaseStick() },
@@ -904,13 +962,13 @@ private fun VirtualMoveStick(
                 modifier = Modifier
                     .offset { IntOffset(xOff.roundToInt(), yOff.roundToInt()) }
                     .size(ringSizeDp)
-                    .alpha(if (floatingStick && !active && !sprintLocked) 0f else 1f),
+                    .alpha(if (floatingStick && !active) 0f else 1f),
             ) {
                 MoveStickVisual(
                     ringSizeDp = ringSizeDp,
                     controlAlpha = alpha,
                     active = active,
-                    sprintLocked = sprintLocked,
+                    sprintActive = sprinting,
                     knobOffsetPx = displayKnob,
                     modifier = Modifier.fillMaxSize(),
                 )
@@ -926,7 +984,7 @@ private fun AimZone(
     interactive: Boolean,
     showHint: Boolean = false,
     onAimBegin: () -> Unit,
-    onAimDelta: (Float, Float) -> Unit,
+    onAimDelta: (dx: Float, dy: Float, uptimeMillis: Long) -> Unit,
     onAimRelease: () -> Unit,
 ) {
     val alpha = controlAlpha.coerceIn(0.15f, 0.95f)
@@ -963,15 +1021,10 @@ private fun AimZone(
                             val down = awaitFirstDown(requireUnconsumed = false)
                             aiming = true
                             onAimBegin()
-                            var last = down.position
                             drag(down.id) { change ->
-                                val pos = change.position
-                                val dx = pos.x - last.x
-                                val dy = pos.y - last.y
-                                if (dx != 0f || dy != 0f) {
-                                    onAimDelta(dx, dy)
+                                change.forEachDeltaSample { dx, dy, uptimeMillis ->
+                                    onAimDelta(dx, dy, uptimeMillis)
                                 }
-                                last = pos
                                 change.consume()
                             }
                             aiming = false
@@ -1015,10 +1068,7 @@ private fun GamepadActionButton(
     onPressChange: (Boolean) -> Unit,
 ) {
     val view = LocalView.current
-    val alpha = (
-        globalControlAlpha.coerceIn(0.15f, 0.95f) *
-            placementOpacity.coerceIn(0.15f, 1f)
-        ).coerceIn(0.15f, 0.95f)
+    val alpha = resolveGamepadControlAlpha(globalControlAlpha, placementOpacity)
     var pressed by remember { mutableStateOf(false) }
 
     val scale by animateFloatAsState(
@@ -1065,13 +1115,10 @@ private fun GamepadActionButton(
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            Image(
-                painter = painterResource(customDrawable),
+            GamepadActionIconImage(
+                drawableRes = customDrawable,
                 contentDescription = GamepadLayouts.label(id),
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clip(CircleShape),
+                displayAlpha = displayAlpha,
             )
         }
         return

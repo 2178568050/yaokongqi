@@ -170,6 +170,7 @@ fun ConnectedPadScreen(
                             onThreeFingerSwipeLeft = viewModel::sendAltShiftTab,
                             onThreeFingerSwipeRight = viewModel::sendAltTab,
                             onThreeFingerSwipeUp = viewModel::sendWinTab,
+                            onGestureEnd = viewModel::flushMouseMove,
                         )
                     }
                 }
@@ -221,6 +222,7 @@ fun ConnectedPadScreen(
                             onThreeFingerSwipeLeft = viewModel::sendAltShiftTab,
                             onThreeFingerSwipeRight = viewModel::sendAltTab,
                             onThreeFingerSwipeUp = viewModel::sendWinTab,
+                            onGestureEnd = viewModel::flushMouseMove,
                         )
                     }
                 }
@@ -705,6 +707,7 @@ fun TouchpadArea(
     onThreeFingerSwipeLeft: () -> Unit = {},
     onThreeFingerSwipeRight: () -> Unit = {},
     onThreeFingerSwipeUp: () -> Unit = {},
+    onGestureEnd: () -> Unit = {},
 ) {
     val scrollMode = settings.touchScrollMode
     val scrollBase = settings.touchSensitivity.scrollMultiplier
@@ -794,6 +797,7 @@ fun TouchpadArea(
                             (view.parent as? android.view.ViewParent)
                                 ?.requestDisallowInterceptTouchEvent(active)
                         },
+                        onGestureEnd = onGestureEnd,
                     ),
                 ),
         )
@@ -836,6 +840,7 @@ fun MinimalScrollScreen(
                 onRightClick = {},
                 onScroll = { dy, _ -> viewModel.sendMouseScroll(dy) },
                 onLongPress = onExit,
+                onGestureEnd = viewModel::flushMouseMove,
             )
         }
         Text(

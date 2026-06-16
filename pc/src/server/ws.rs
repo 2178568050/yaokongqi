@@ -10,13 +10,16 @@ use tokio::sync::watch;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 use crate::auth::AppConfig;
-use crate::config::{APP_MAGIC, LISTEN_PORT, WS_PATH};
+use crate::config::{APP_MAGIC, LISTEN_PORT, UDP_LISTEN_PORT, WS_PATH};
 use crate::input::{
     apply_gamepad_snapshot, enqueue_combo, enqueue_key, enqueue_mouse_click, enqueue_mouse_move,
     enqueue_mouse_scroll, enqueue_release_all, enqueue_system_shutdown, enqueue_text,
     gamepad_mode_active, release_gamepad, set_gamepad_mode, vigem_available, GamepadSnapshot,
 };
-use crate::protocol::{ClientMessage, RemoteInputMode, ServerMessage, SystemAction};
+use crate::protocol::binary::parse_ws_frame;
+use crate::protocol::{normalize_gamepad_hz, ClientMessage, RemoteInputMode, ServerMessage, SystemAction};
+use crate::server::session::{active_udp_session_key, clear_udp_session_key, rotate_udp_session_key};
+use crate::server::udp::reset_udp_seq;
 
 struct ActiveSession {
     id: u64,
@@ -29,6 +32,12 @@ static ACTIVE_SESSION: once_cell::sync::Lazy<Arc<Mutex<Option<ActiveSession>>>> 
     once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(None)));
 
 pub async fn run_server(config: Arc<RwLock<AppConfig>>) -> Result<()> {
+    tokio::spawn(async {
+        if let Err(e) = super::udp::run_udp_server().await {
+            log::error!("UDP 服务异常: {e}");
+        }
+    });
+
     let addr = SocketAddr::from(([0, 0, 0, 0], LISTEN_PORT));
     let listener = TcpListener::bind(addr).await?;
     log::info!("遥控器服务已启动 ws://0.0.0.0:{LISTEN_PORT}{WS_PATH}");
@@ -51,8 +60,11 @@ async fn handle_connection(
 ) -> Result<()> {
     let ws_stream = accept_async(stream).await?;
 
+    let udp_key = rotate_udp_session_key();
+    reset_udp_seq();
+
     let (mut write, mut read) = ws_stream.split();
-    log::info!("客户端已连接: {peer}");
+    log::info!("客户端已连接: {peer} | UDP key={udp_key}");
 
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     let session_id = NEXT_SESSION_ID.fetch_add(1, Ordering::SeqCst);
@@ -82,6 +94,10 @@ async fn handle_connection(
                     Some(Ok(msg)) => {
                         if msg.is_close() {
                             break;
+                        }
+                        if msg.is_binary() {
+                            process_binary(msg.into_data(), &config).await;
+                            continue;
                         }
                         if !msg.is_text() {
                             continue;
@@ -125,10 +141,27 @@ async fn handle_connection(
     };
 
     if should_release {
+        clear_udp_session_key();
+        reset_udp_seq();
         release_gamepad();
         enqueue_release_all();
     }
     Ok(())
+}
+
+async fn process_binary(data: Vec<u8>, _config: &Arc<RwLock<AppConfig>>) {
+    let Some(frame) = parse_ws_frame(&data) else {
+        return;
+    };
+    if !gamepad_mode_active() {
+        return;
+    }
+    apply_gamepad_snapshot(frame.snapshot());
+}
+
+fn udp_session_info() -> (u16, u32) {
+    use crate::server::session::active_udp_session_key;
+    (UDP_LISTEN_PORT, active_udp_session_key())
 }
 
 async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<String> {
@@ -141,7 +174,10 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
     };
 
     match msg {
-        ClientMessage::Ping { seq, ts } => Some(ServerMessage::Pong { seq, ts }.to_json()),
+        ClientMessage::Ping { seq, ts } => {
+            let (udp_port, udp_key) = udp_session_info();
+            Some(ServerMessage::pong(seq, ts, udp_port, udp_key).to_json())
+        }
 
         ClientMessage::InputMode { token, mode, hz } => {
             let cfg = config.read().await;
@@ -152,7 +188,7 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
 
             match mode {
                 RemoteInputMode::KeyboardMouse => {
-                    set_gamepad_mode(false, hz);
+                    set_gamepad_mode(false, normalize_gamepad_hz(hz));
                     None
                 }
                 RemoteInputMode::Gamepad => {
@@ -165,7 +201,7 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
                             .to_json(),
                         );
                     }
-                    set_gamepad_mode(true, hz);
+                    set_gamepad_mode(true, normalize_gamepad_hz(hz));
                     None
                 }
             }
@@ -218,10 +254,12 @@ async fn process_message(text: &str, config: &Arc<RwLock<AppConfig>>) -> Option<
             log::info!("设备已配对: {device}");
 
             Some(
-                ServerMessage::Paired {
-                    token: cfg.session_token.clone(),
-                    pc_name: hostname(),
-                }
+                ServerMessage::paired(
+                    cfg.session_token.clone(),
+                    hostname(),
+                    UDP_LISTEN_PORT,
+                    active_udp_session_key(),
+                )
                 .to_json(),
             )
         }

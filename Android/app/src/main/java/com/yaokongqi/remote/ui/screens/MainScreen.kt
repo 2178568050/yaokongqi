@@ -19,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +52,7 @@ import com.yaokongqi.remote.ui.navigation.forwardTransition
 import com.yaokongqi.remote.ui.navigation.minimalEnterTransition
 import com.yaokongqi.remote.ui.navigation.minimalExitTransition
 import com.yaokongqi.remote.ui.theme.Connected
+import com.yaokongqi.remote.ui.theme.Primary
 import com.yaokongqi.remote.ui.theme.ErrorColor
 
 private enum class SubScreen { Pad, Settings }
@@ -157,11 +160,23 @@ fun MainScreen(
                                 modifier = if (landscapeCompactBar) Modifier.statusBarsPadding() else Modifier,
                             )
                             when (info.state) {
-                                ConnectionState.Connected -> ConnectedPadScreen(
-                                    viewModel = viewModel,
-                                    settings = settings,
-                                    onPinchOutToMinimal = { viewModel.enterMinimalScrollMode() },
-                                )
+                                ConnectionState.Connected -> {
+                                    if (!settings.shooterGamepadMode) {
+                                        EnterShooterModeBar(
+                                            onEnter = viewModel::enterShooterGamepadMode,
+                                            modifier = if (landscapeCompactBar) {
+                                                Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            } else {
+                                                Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                                            },
+                                        )
+                                    }
+                                    ConnectedPadScreen(
+                                        viewModel = viewModel,
+                                        settings = settings,
+                                        onPinchOutToMinimal = { viewModel.enterMinimalScrollMode() },
+                                    )
+                                }
                                 ConnectionState.Connecting -> Box(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center,
@@ -186,6 +201,20 @@ fun MainScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun EnterShooterModeBar(
+    onEnter: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Button(
+        onClick = onEnter,
+        modifier = modifier.fillMaxWidth(),
+        colors = ButtonDefaults.buttonColors(containerColor = Primary),
+    ) {
+        Text("进入射击模式")
     }
 }
 

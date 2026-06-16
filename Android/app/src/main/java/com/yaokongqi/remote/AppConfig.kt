@@ -9,6 +9,9 @@ object AppConfig {
     /** TCP 端口（取自标识 10230825 的有效后缀 10825） */
     const val LISTEN_PORT = 10825
 
+    /** 手柄 UDP 数据通道 */
+    const val UDP_LISTEN_PORT = 10826
+
     /** 协议魔数 */
     const val APP_MAGIC = 10230825
 
